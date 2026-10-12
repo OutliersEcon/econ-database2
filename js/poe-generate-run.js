@@ -463,6 +463,14 @@
             }), Poe.GENERATE_WAIT_MS, Poe.poeUi.control);
             if (!data || data.ok !== true) {
                 var code = data && data.error ? data.error : 'server_error';
+                try {
+                    console.error('[AI出題] proxy returned failure', {
+                        action: 'generateQuestions',
+                        code: code,
+                        requestId: requestId,
+                        data: data
+                    });
+                } catch (logErr) { /* ignore */ }
                 if (code === 'feature_unavailable') Poe.hideGenerateButton();
                 draft.content = '';
                 draft.incomplete = true;
@@ -501,6 +509,13 @@
                 }
             }
             if (!String(content || '').trim()) {
+                try {
+                    console.error('[AI出題] empty/bad response after generate', {
+                        action: 'generateQuestions',
+                        requestId: requestId,
+                        data: data
+                    });
+                } catch (logErr) { /* ignore */ }
                 draft.content = '';
                 draft.incomplete = true;
                 draft.durationMs = Date.now() - startedAt;
@@ -538,6 +553,16 @@
             await Poe.presentGenerationRecord(record, needsBackupFetch, data);
         } catch (error) {
             var failCode = error && error.code ? error.code : 'network';
+            if (failCode !== 'cancelled') {
+                try {
+                    console.error('[AI出題] generate threw', {
+                        action: 'generateQuestions',
+                        code: failCode,
+                        requestId: requestId,
+                        err: error
+                    });
+                } catch (logErr) { /* ignore */ }
+            }
             if (failCode === 'cancelled') {
                 draft.incomplete = true;
                 draft.durationMs = Date.now() - startedAt;
@@ -895,6 +920,14 @@
             var data = await Poe.proxyRequest(payload, Poe.GENERATE_WAIT_MS, Poe.poeUi.control);
             if (!data || data.ok !== true) {
                 var code = data && data.error ? data.error : 'server_error';
+                try {
+                    console.error('[AI出題] follow-up proxy failure', {
+                        action: 'continueGeneration',
+                        code: code,
+                        requestId: requestId,
+                        data: data
+                    });
+                } catch (logErr) { /* ignore */ }
                 if (code === 'feature_unavailable') Poe.hideGenerateButton();
                 if (Poe.isPoeGenerateModalOpen()) {
                     Poe.showError(code);
@@ -906,6 +939,13 @@
             }
             var reply = String(data.content || '').trim();
             if (!reply) {
+                try {
+                    console.error('[AI出題] follow-up empty response', {
+                        action: 'continueGeneration',
+                        requestId: requestId,
+                        data: data
+                    });
+                } catch (logErr) { /* ignore */ }
                 if (Poe.isPoeGenerateModalOpen()) {
                     Poe.showError('empty_response');
                     Poe.showResult(record);
@@ -945,6 +985,16 @@
             }
         } catch (error) {
             var failCode = error && error.code ? error.code : 'network';
+            if (failCode !== 'cancelled') {
+                try {
+                    console.error('[AI出題] follow-up threw', {
+                        action: 'continueGeneration',
+                        code: failCode,
+                        requestId: requestId,
+                        err: error
+                    });
+                } catch (logErr) { /* ignore */ }
+            }
             if (Poe.isPoeGenerateModalOpen()) {
                 if (failCode === 'cancelled') {
                     Poe.showResult(record);

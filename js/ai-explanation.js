@@ -892,6 +892,14 @@
                 var stillOpen = modalState.questionId === qid && overlay && !overlay.hidden;
                 if (!data || data.ok !== true) {
                     var failMsg = errorMessage(data && data.error);
+                    try {
+                        console.error('[AI解釋] generate failed', {
+                            questionId: qid,
+                            detailLevel: detailLevel,
+                            error: data && data.error,
+                            data: data
+                        });
+                    } catch (logErr) { /* ignore */ }
                     job.busy = false;
                     job.status = failMsg;
                     job.statusKind = 'error';
@@ -911,6 +919,15 @@
                 var okMsg = data.persisted === false
                     ? ('已產生，但未能寫入共用檔（' + errorMessage(data.error || 'github_error') + '）')
                     : '已產生並儲存';
+                if (data.persisted === false) {
+                    try {
+                        console.warn('[AI解釋] generated but not persisted', {
+                            questionId: qid,
+                            error: data.error,
+                            data: data
+                        });
+                    } catch (logErr) { /* ignore */ }
+                }
                 var okKind = data.persisted === false ? 'warn' : 'ok';
                 job.busy = false;
                 job.status = okMsg;
@@ -930,6 +947,14 @@
                 if (typeof populateDynamicFilters === 'function') populateDynamicFilters();
             } catch (err) {
                 var errMsg = errorMessage(err && err.code);
+                try {
+                    console.error('[AI解釋] generate error', {
+                        questionId: qid,
+                        detailLevel: detailLevel,
+                        code: err && err.code,
+                        err: err
+                    });
+                } catch (logErr) { /* ignore */ }
                 job.busy = false;
                 job.status = errMsg;
                 job.statusKind = 'error';

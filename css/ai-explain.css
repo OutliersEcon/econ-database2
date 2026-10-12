@@ -18,7 +18,7 @@
 }
 
 .ai-explain-dialog {
-    width: min(920px, 100%);
+    width: min(1080px, 100%);
     max-height: min(92vh, 940px);
     display: flex;
     flex-direction: column;
