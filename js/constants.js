@@ -5,7 +5,7 @@
 
 // Printed when the page loads. Bump this on every change so a reader can
 // tell whether the open tab is current. Do not keep a changelog here.
-const APP_VERSION = '2026.10.12.01';
+const APP_VERSION = '2026.10.13.01';
 console.log('Question bank version:', APP_VERSION);
 
 // Integer stamped on shared bank JSON as schemaVersion. Also an app-capability
@@ -93,7 +93,6 @@ const FEATURE_ITEMS = [
     '跨課題',
     '跨章節',
     '有分題',
-    '沒有分題',
     '尚未輸入分題',
     '已刪除',
     'Out syl'
