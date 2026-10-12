@@ -173,6 +173,14 @@
     }
 
     Poe.showError = function showError(code) {
+        try {
+            console.error('[AI出題] generate failed', {
+                code: code,
+                message: (Poe.ERROR_TEXT && Poe.ERROR_TEXT[code]) || code,
+                provider: typeof Poe.currentProvider === 'function' ? Poe.currentProvider() : '',
+                model: typeof Poe.currentModel === 'function' ? Poe.currentModel() : ''
+            });
+        } catch (logErr) { /* ignore */ }
         var stage = document.getElementById('poe-stage');
         if (!stage) return;
         Poe.closeEnlargeOverlay();
