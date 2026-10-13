@@ -136,3 +136,74 @@
     background: rgba(21, 101, 192, 0.12);
     outline: none;
 }
+
+/* Inline diagrams editor (edit form) */
+.inline-diagrams-preview {
+    border: 1px dashed var(--border-color, #ccc);
+    border-radius: var(--radius-md, 8px);
+    padding: 10px;
+    background: var(--light-bg, #fafafa);
+    min-height: 48px;
+}
+
+.inline-diagrams-empty {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-light, #666);
+}
+
+.inline-diagrams-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.inline-diagrams-item {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 8px;
+    border: 1px solid var(--border-light, #e5e5e5);
+    border-radius: 8px;
+    background: #fff;
+}
+
+.inline-diagrams-thumb-wrap {
+    flex: 0 0 auto;
+}
+
+.inline-diagrams-thumb {
+    max-width: 160px;
+    max-height: 120px;
+    object-fit: contain;
+    border-radius: 4px;
+    background: #f0f0f0;
+    display: block;
+}
+
+.inline-diagrams-item-meta {
+    flex: 1 1 180px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.inline-diagrams-path {
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.inline-diagrams-item-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.inline-diagrams-status.is-error {
+    color: #c62828;
+}

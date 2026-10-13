@@ -104,7 +104,10 @@ const FEATURE_ITEMS = [
 const ADMIN_BLANK_FEATURE_ITEMS = [
     '題目空白',
     '答案空白',
-    '評卷報告空白'
+    '評卷報告空白',
+    '缺內嵌圖',
+    '缺原題圖片',
+    '缺答案原圖'
 ];
 
 // Per-part performance labels (exact values stored on questionParts[].performance).

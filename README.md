@@ -164,9 +164,40 @@ Redeploy Apps Script after merge (paste `apps-script/Code.gs` → New version, s
 
 **批量編輯** (`js/bulk-edit.js`) is an independent modal shown only with `accessRights.admin` **and** 管理員模式 (`btn-admin-only`). It loads the **current filtered** 題目 list (cap 300 rows), one editable row per question. **Default columns:** 題目 ID (always visible, read-only), Chapters (`AristochapterClassification`), 課程分類 (`curriculumClassification`), total `marks`, and compact `questionParts` (`a,2,良好 | b,3,優良`). **欄位 picker** toggles extra editable fields (concepts, patterns, stemPatterns, graph/table/calculation/multiple-selection types, optionDesign, section, year, paper, publisher, examination, questionType); the choice is stored in this browser’s `localStorage` (`econ_bulk_edit_columns_v1`). List/tag fields use **token autocomplete** (current comma-separated token), reusing vocabulary from `CURRICULUM_ITEMS` / `CHAPTER_RANGE` (`Ch01`…`Ch29`) and `ConditionMatch.collectFieldValues` over the bank. Curriculum still accepts only `CURRICULUM_ITEMS`. Save writes only changed rows after confirm; part-sum validation applies. Uses existing IndexedDB update + optional 自動同步 — no separate upload path.
 
+## 缺圖提醒 + 內嵌圖編輯 / Missing images UX
+
+### Heuristics (缺圖提醒 panel + admin 特徵)
+
+Admin header button **缺圖提醒** (`js/missing-images.js`) lists questions that still look like they need images. Checkboxes filter which heuristics apply (default: 缺內嵌圖 + 缺原題):
+
+| Label | Heuristic |
+| --- | --- |
+| **缺內嵌圖** | `graphType` is set and not empty / `-` / `沒有圖`, but `inlineDiagrams` is blank. |
+| **缺原題** / **缺原題圖片** | Both `originalQuestionImage` and `originalQuestionImageEng` blank (or `-`). |
+| **缺答案原圖** | Both `originalAnswerImage` and `originalAnswerImageEng` blank (or `-`). |
+
+Click a question id to open the edit form (admin) or fall back to 題目 ID filter. The same three labels are also admin-only 特徵 filters (`ADMIN_BLANK_FEATURE_ITEMS` in `js/constants.js` / matchers in `js/question-fields.js`).
+
+### Edit form: inline diagrams
+
+When editing a question (`js/templates/template-form.js`, `js/form-diagrams.js`):
+
+- Preview existing `inlineDiagrams` paths via `hydrateSharedImages` / `data-shared-src`.
+- **上載並加入** (requires `githubSync`): POST `uploadSharedAsset` → Apps Script writes the file under `shared/diagrams/…` with `GITHUB_TOKEN`, then appends `diagrams/…` to the comma-separated field (schema unchanged).
+- Path text field remains for advanced edits; save still stores a string (comma-separated paths).
+- Edit save **merges** with the existing IndexedDB row so `original*` / other non-form fields are not wiped.
+
+### AI read image → description
+
+- Buttons **AI 描述** (per preview) / **AI 描述本機檔** require `accessRights.ai` (same gate as AI出題).
+- Client sends the image to Apps Script action `describeImage` (Poe/OpenRouter multimodal `image_url` data URL via the existing proxy).
+- User must **confirm** before the short Traditional Chinese description is appended to **備註** as `【圖描述】…`. Stem fields are never overwritten.
+
+**Redeploy Apps Script** after merge so `uploadSharedAsset` and `describeImage` exist on the live `/exec` deployment. Details: `apps-script/README.md`.
+
 ## Admin blank filters (admin only)
 
-When `accessRights.admin === true`, 特徵 also offers **題目空白** / **答案空白** / **評卷報告空白** (`js/question-fields.js`). Blank means empty, whitespace-only, or `-`. 題目 = Chi/Eng/plainText; 答案 = answerMC + answerChi/Eng; 評卷報告 = markersReportChi/Eng. Non-admins do not see or apply these.
+When `accessRights.admin === true`, 特徵 also offers **題目空白** / **答案空白** / **評卷報告空白** / **缺內嵌圖** / **缺原題圖片** / **缺答案原圖** (`js/question-fields.js`). Blank means empty, whitespace-only, or `-`. 題目 = Chi/Eng/plainText; 答案 = answerMC + answerChi/Eng; 評卷報告 = markersReportChi/Eng. Image heuristics: see **缺圖提醒** above. Non-admins do not see or apply these.
 
 **過往紀錄 (cross-device):** Successful generations still save in this browser (`IndexedDB` / `localStorage`). When GitHub AI backups are configured, opening the modal also calls `listAiBackups` (auth: `ai`, not `githubSync`) and merges that user's private `users/<username>/<GITHUB_AI_BACKUP_DIR>/` replies into the same list (deduped). List pages are lean (preview only); opening a row loads the full reply with `getAiBackup`, including chunked reads for very long text. Long `generateQuestions` replies may also arrive with `contentViaBackup` so the browser fetches the backup instead of parsing an oversized web-app body. Each request returns 30 backups, newest first; the modal can open older pages. Search matches only the page on screen. Remote failures stay non-blocking. Incomplete runs still stay in 使用紀錄. Details: `apps-script/README.md`.
 

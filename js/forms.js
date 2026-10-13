@@ -27,6 +27,9 @@ function clearForm() {
     renderQuestionPartRows([]);
     syncPartsEditorVisibility();
     syncAllTagBadges();
+    if (window.FormDiagrams && typeof FormDiagrams.clear === 'function') {
+        FormDiagrams.clear();
+    }
 }
 
 function getPartsStatusRadio() {
@@ -304,7 +307,27 @@ function setupFormHandler() {
             }
         }
 
-        const question = {
+        // On edit, start from the existing row so fields not on this form
+        // (original* images, plainText, source, …) are not wiped.
+        let existingQuestion = null;
+        if (window.editingId && window.storage) {
+            try {
+                const allForMerge = (typeof window.storage.getAllQuestions === 'function')
+                    ? await window.storage.getAllQuestions()
+                    : await window.storage.getQuestions();
+                existingQuestion = (allForMerge || []).find(q => String(q && q.id) === String(window.editingId)) || null;
+            } catch (mergeErr) {
+                console.warn('edit merge load failed', mergeErr);
+            }
+        }
+
+        const inlineDiagramsValue = (window.FormDiagrams && typeof FormDiagrams.read === 'function')
+            ? FormDiagrams.read()
+            : (document.getElementById('inline-diagrams')
+                ? document.getElementById('inline-diagrams').value.trim()
+                : '');
+
+        const formFields = {
             id: window.editingId || document.getElementById('question-id').value.trim(),
             publisher: document.getElementById('publisher').value.trim(),
             examination: document.getElementById('examination').value,
@@ -335,12 +358,28 @@ function setupFormHandler() {
             stemPatterns: document.getElementById('stemPatterns').value.split(',').map(s => s.trim()).filter(s => s),
             optionDesign: document.getElementById('option-design').value.trim(),
             // Legacy AIExplanation URL field is unused; AI解釋 lives in
-            // shared/data/ai-explanations.json. Keep empty for bank compatibility.
-            AIExplanation: '',
+            // shared/data/ai-explanations.json. Keep empty for bank compatibility
+            // unless an existing row still carries a value we must not invent.
+            AIExplanation: existingQuestion && existingQuestion.AIExplanation
+                ? existingQuestion.AIExplanation
+                : '',
             remarks: document.getElementById('remarks').value.trim(),
-            dateAdded: window.editingId ? null : new Date().toISOString(),
+            inlineDiagrams: inlineDiagramsValue,
             dateModified: new Date().toISOString()
         };
+
+        const question = existingQuestion
+            ? Object.assign({}, existingQuestion, formFields, {
+                dateAdded: existingQuestion.dateAdded || existingQuestion.date_added || null
+            })
+            : Object.assign({}, formFields, {
+                dateAdded: new Date().toISOString()
+            });
+
+        // Keep plainText aligned with Chinese stem when the form edits stem.
+        if (question.questionTextChi) {
+            question.plainText = question.questionTextChi;
+        }
 
         const partsChoice = getPartsStatusRadio();
         const partsRaw = partsChoice === 'filled' ? readQuestionPartsFromForm() : [];
@@ -542,6 +581,11 @@ async function editQuestion(id) {
     document.getElementById('stemPatterns').value = (question.stemPatterns || []).join(', ');
     document.getElementById('option-design').value = question.optionDesign || '';
     document.getElementById('remarks').value = question.remarks || '';
+    if (window.FormDiagrams && typeof FormDiagrams.populate === 'function') {
+        FormDiagrams.populate(question);
+    } else if (document.getElementById('inline-diagrams')) {
+        document.getElementById('inline-diagrams').value = question.inlineDiagrams || '';
+    }
     const partsStatus = (typeof resolvePartsStatus === 'function')
         ? resolvePartsStatus(question)
         : (question.questionParts && question.questionParts.length
