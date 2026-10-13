@@ -647,13 +647,28 @@
             : '普通檢查';
     }
 
+    // Display year like the 題目 year filter (MT29 not bare 29). Mock papers
+    // store examination "HKDSE" + year "MT##"; after normalizeYearFilterKey the
+    // group key is digits-only — do not prefix those with HKDSE.
     function formatHitGroupLabel(group) {
-        var exam = (group && group.examination) ? group.examination : '（無考試）';
-        var year = (group && group.yearKey) ? group.yearKey : '（無年份）';
+        var yearRaw = group && group.yearKey != null ? group.yearKey : '';
+        var yearLabel;
+        if (typeof yearFilterLabel === 'function') {
+            yearLabel = yearFilterLabel(yearRaw);
+        } else {
+            yearLabel = String(yearRaw == null ? '' : yearRaw).trim();
+            if (/^\d{1,3}$/.test(yearLabel)) yearLabel = 'MT' + yearLabel;
+        }
+        if (!yearLabel) yearLabel = '（無年份）';
         var papers = (group && group.papers && group.papers.length)
             ? group.papers.join('、')
             : '（無卷別）';
-        return exam + ' ' + year + '（' + papers + '）';
+        var isMockYear = /^MT\d/i.test(yearLabel) || /^\d{1,3}$/.test(String(yearRaw).trim());
+        if (isMockYear) {
+            return yearLabel + '（' + papers + '）';
+        }
+        var exam = (group && group.examination) ? group.examination : '（無考試）';
+        return exam + ' ' + yearLabel + '（' + papers + '）';
     }
 
     function ensureButton() {
