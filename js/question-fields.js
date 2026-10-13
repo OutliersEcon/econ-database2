@@ -18,7 +18,8 @@
 // sum(part.marks) === marks (tolerance PART_MARKS_SUM_TOLERANCE).
 //
 // partsStatus: "pending" | "none" | "filled"
-//   pending = 尚未輸入 (legacy empty/absent migrates here; not confirmed none)
+//   pending = 尚未輸入 (legacy empty/absent for non-MC; not confirmed none)
+//   MC with no parts resolves to none (MC has no 分題)
 //   none    = 沒有分題 (explicitly confirmed no sub-parts; store [])
 //   filled  = 有分題 (non-empty questionParts)
 
@@ -202,10 +203,16 @@
 
     // Effective status. Non-empty parts always win as filled. Legacy empty
     // without partsStatus → pending (not confirmed none).
+        // Resolve effective parts status for filters / UI.
+    // Non-empty questionParts always wins as filled. Explicit none stays none.
+    // MC questions never use sub-parts in this bank: missing/empty parts → none
+    // (not pending「尚未輸入分題」). Other types without partsStatus → pending.
     function resolvePartsStatus(question) {
         if (questionHasParts(question)) return PARTS_STATUS_FILLED;
         var stored = normalizePartsStatus(question && question.partsStatus);
         if (stored === PARTS_STATUS_NONE) return PARTS_STATUS_NONE;
+        var qtype = String(question && question.questionType != null ? question.questionType : '').trim();
+        if (qtype === 'MC') return PARTS_STATUS_NONE;
         return PARTS_STATUS_PENDING;
     }
 
