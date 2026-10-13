@@ -26,6 +26,7 @@ function clearForm() {
     setPartsStatusRadio('pending');
     renderQuestionPartRows([]);
     syncPartsEditorVisibility();
+    syncAllTagBadges();
 }
 
 function getPartsStatusRadio() {
@@ -187,9 +188,84 @@ async function checkDuplicate(formData) {
 
 // Save question
 // Dependencies: globals.js (window.editingId), storage-core.js (window.storage), main.js (refreshViews)
+
+// Removable tag badges under comma-separated classification fields.
+// Input stays authoritative; badges mirror parse/join on commas.
+const TAG_BADGE_FIELDS = [
+    { inputId: 'concepts', badgesId: 'concepts-badges' },
+    { inputId: 'patterns', badgesId: 'patterns-badges' },
+    { inputId: 'stemPatterns', badgesId: 'stemPatterns-badges' },
+    { inputId: 'chapter-classification', badgesId: 'chapter-classification-badges' }
+];
+
+function parseTagInputValue(value) {
+    return String(value || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+}
+
+function syncTagBadges(inputId, badgesId) {
+    const input = document.getElementById(inputId);
+    const container = document.getElementById(badgesId);
+    if (!input || !container) return;
+    const tags = parseTagInputValue(input.value);
+    if (!tags.length) {
+        container.innerHTML = '';
+        return;
+    }
+    const esc = (typeof escapeHTML === 'function')
+        ? escapeHTML
+        : function (s) { return String(s == null ? '' : s); };
+    container.innerHTML = tags.map(function (tag, index) {
+        return '<span class="form-tag-badge">'
+            + '<span class="form-tag-badge-text">' + esc(tag) + '</span>'
+            + '<button type="button" class="form-tag-badge-remove" data-index="' + index
+            + '" aria-label="移除 ' + esc(tag) + '" title="移除">×</button>'
+            + '</span>';
+    }).join('');
+}
+
+function syncAllTagBadges() {
+    TAG_BADGE_FIELDS.forEach(function (field) {
+        syncTagBadges(field.inputId, field.badgesId);
+    });
+}
+
+function removeTagBadgeAt(inputId, badgesId, index) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const tags = parseTagInputValue(input.value);
+    if (index < 0 || index >= tags.length) return;
+    tags.splice(index, 1);
+    input.value = tags.join(', ');
+    syncTagBadges(inputId, badgesId);
+}
+
+function setupTagBadges() {
+    TAG_BADGE_FIELDS.forEach(function (field) {
+        const input = document.getElementById(field.inputId);
+        const container = document.getElementById(field.badgesId);
+        if (!input || !container) return;
+        input.addEventListener('input', function () {
+            syncTagBadges(field.inputId, field.badgesId);
+        });
+        input.addEventListener('change', function () {
+            syncTagBadges(field.inputId, field.badgesId);
+        });
+        container.addEventListener('click', function (e) {
+            const btn = e.target.closest('.form-tag-badge-remove');
+            if (!btn || !container.contains(btn)) return;
+            e.preventDefault();
+            const index = parseInt(btn.getAttribute('data-index'), 10);
+            if (!Number.isFinite(index)) return;
+            removeTagBadgeAt(field.inputId, field.badgesId, index);
+        });
+    });
+}
+
 function setupFormHandler() {
     const form = document.getElementById('question-form');
     if (!form) return;
+
+    setupTagBadges();
     
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -474,6 +550,7 @@ async function editQuestion(id) {
     setPartsStatusRadio(partsStatus);
     renderQuestionPartRows(partsStatus === 'filled' ? (question.questionParts || []) : []);
     syncPartsEditorVisibility();
+    syncAllTagBadges();
     
     document.getElementById('form-section').classList.remove('hidden');
     document.getElementById('form-title').textContent = '編輯題目';
