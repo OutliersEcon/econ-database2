@@ -131,9 +131,11 @@ Canonical semantics in `js/question-fields.js`:
 | --- | --- | --- |
 | `filled` | non-empty `questionParts` (always wins) | `有分題` |
 | `none` | confirmed no parts | `沒有分題` |
-| `pending` | legacy empty / unentered | `尚未輸入分題` |
+| `pending` | legacy empty / unentered (non-MC only) | `尚未輸入分題` |
 
 `questionFeatureOn(q, value)` is the **single** matcher for 題目 tri-state feature, 統計 feature dimension, and ConditionMatch `feature` field.
+- **MC and 分題：** `resolvePartsStatus` treats `questionType === 'MC'` with no `questionParts` as `none`（沒有分題）, not `pending`（尚未輸入分題）. Only non-MC empty parts stay pending until confirmed.
+
 
 統計 also exposes derived dimension `hasParts` (`STAT_TABS.hasParts`) with the same three labels; jump maps into `tri.feature[...]`.
 
@@ -219,6 +221,7 @@ Intentionally separate: stats state must not mutate until jump — correct produ
 ## 5. partsStatus / 特徵 / admin blank edge cases
 
 - Non-empty parts always → `filled` (`resolvePartsStatus`); stale `partsStatus: none` cannot win.
+- `questionType === 'MC'` with no parts → `none` (MC has no 分題); not counted as `尚未輸入分題`.
 - Choosing「有分題」with empty rows on save → stored as `pending` (`applyPartsFields`).
 - Sync (`storage-sync.js`): empty parts + missing status → leave pending; do not invent `none`.
 - Admin blanks: blank text fields (`-` counts blank); independent of partsStatus.
