@@ -29,7 +29,8 @@ var GIT_ERROR_TEXT = {
     validation_failed: '上傳已拒絕：題目欄位驗證失敗',
     unknown_publisher: '上傳已拒絕：有題目的出版社不是 HKEAA 或 雅集出版社',
     empty_shard_refused: '上傳已拒絕：不可覆寫空白分片（請確認 wipe）',
-    nothing_to_upload: '題庫與雲端相同，無需上傳'
+    nothing_to_upload: '題庫與雲端相同，無需上傳',
+    timeout: '同步逾時，請再試一次（大題庫上傳可能需數分鐘）'
 };
 
 function gitProxyUrl() {
@@ -150,6 +151,10 @@ function parseGitProxyJson(text) {
 // A parsed JSON body (ok:true or ok:false) is never retried.
 var GIT_PROXY_RETRY_MAX = 3;
 var GIT_PROXY_RETRY_BASE_MS = 1200;
+// Bank upload (dirty shards + combined) can exceed 3 minutes for multi-MB JSON
+// through Apps Script → GitHub. Keep download peeks at 180s; uploads get 15 min
+// per file so one AbortController does not kill a still-running AS write.
+var GIT_PROXY_UPLOAD_TIMEOUT_MS = 900000;
 
 function gitProxyError(code) {
     var error = new Error(code || 'network');
@@ -188,8 +193,10 @@ async function gitProxyRequestOnce(payload, timeoutMs) {
             throw gitProxyError('bad_response');
         }
     } catch (error) {
-        if (error && error.code) throw error;
-        if (error && error.name === 'AbortError') throw gitProxyError('network');
+        // AbortController.abort() yields DOMException AbortError with numeric
+        // .code (20). Treat that as our timeout, not a gitProxyError code.
+        if (error && error.name === 'AbortError') throw gitProxyError('timeout');
+        if (error && typeof error.code === 'string' && error.code) throw error;
         throw gitProxyError('network');
     } finally {
         clearTimeout(timer);
@@ -442,41 +449,68 @@ async function uploadQuestionsToGit(options) {
                 data: buildPayload(exportData, combinedQs)
             });
 
-            setGitStatus('正在上傳髒分片（'
-                + (hkeaaDirty ? 'HKEAA ' + localHkeaa.length : '')
-                + (hkeaaDirty && aristoDirty ? ' + ' : '')
-                + (aristoDirty ? '雅集 ' + localAristo.length : '')
-                + '）…', '');
-
-            var data = await gitProxyRequest({
-                action: 'syncDataUpload',
-                username: gitUsername(),
-                files: files
-            }, 180000);
-            if (!data || data.ok !== true) {
-                var failed = new Error((data && (data.message || data.error)) || 'github_error');
-                failed.code = data && data.error ? data.error : 'github_error';
-                if (data && typeof data.message === 'string' && data.message) {
-                    failed.message = data.message;
+            // Upload one allowlisted file per Apps Script call so each write stays
+            // under AS ~6 min and the client AbortController is not shared across
+            // HKEAA + combined (~2.5MB + ~6MB) in a single 180s body.
+            var uploadTimeoutMs = typeof GIT_PROXY_UPLOAD_TIMEOUT_MS === 'number'
+                ? GIT_PROXY_UPLOAD_TIMEOUT_MS
+                : 900000;
+            var writtenList = [];
+            var writtenSchema = 0;
+            var data = null;
+            for (var fi = 0; fi < files.length; fi++) {
+                var fileSpec = files[fi];
+                var pathLabel = String(fileSpec.path || '');
+                var shortLabel = pathLabel.indexOf('hkeaa') !== -1
+                    ? ('HKEAA ' + localHkeaa.length)
+                    : (pathLabel.indexOf('aristo') !== -1
+                        ? ('雅集 ' + localAristo.length)
+                        : ('合併 ' + combinedQs.length));
+                setGitStatus('正在上傳髒分片（'
+                    + shortLabel
+                    + '；'
+                    + (fi + 1)
+                    + '/'
+                    + files.length
+                    + '）…', '');
+                data = await gitProxyRequest({
+                    action: 'syncDataUpload',
+                    username: gitUsername(),
+                    files: [fileSpec]
+                }, uploadTimeoutMs);
+                if (!data || data.ok !== true) {
+                    var failed = new Error((data && (data.message || data.error)) || 'github_error');
+                    failed.code = data && data.error ? data.error : 'github_error';
+                    if (data && typeof data.message === 'string' && data.message) {
+                        failed.message = data.message;
+                    }
+                    if (data && typeof data.clientSchemaVersion === 'number') {
+                        failed.clientSchemaVersion = data.clientSchemaVersion;
+                    }
+                    if (data && typeof data.cloudSchemaVersion === 'number') {
+                        failed.cloudSchemaVersion = data.cloudSchemaVersion;
+                    }
+                    if (data && Array.isArray(data.failingIds)) {
+                        failed.failingIds = data.failingIds;
+                    }
+                    throw failed;
                 }
-                if (data && typeof data.clientSchemaVersion === 'number') {
-                    failed.clientSchemaVersion = data.clientSchemaVersion;
+                if (Array.isArray(data.written)) {
+                    for (var wi = 0; wi < data.written.length; wi++) {
+                        writtenList.push(data.written[wi]);
+                    }
                 }
-                if (data && typeof data.cloudSchemaVersion === 'number') {
-                    failed.cloudSchemaVersion = data.cloudSchemaVersion;
+                if (typeof data.schemaVersion === 'number' && data.schemaVersion > writtenSchema) {
+                    writtenSchema = data.schemaVersion;
                 }
-                if (data && Array.isArray(data.failingIds)) {
-                    failed.failingIds = data.failingIds;
-                }
-                throw failed;
+            }
+            if (!writtenSchema && typeof readSchemaVersion === 'function') {
+                writtenSchema = readSchemaVersion(exportData) || 0;
             }
             var count = combinedQs.length;
-            var writtenSchema = (typeof data.schemaVersion === 'number')
-                ? data.schemaVersion
-                : (typeof readSchemaVersion === 'function' ? readSchemaVersion(exportData) : 0);
-            var writtenPaths = Array.isArray(data.written)
-                ? data.written.map(function (w) { return w && w.path ? String(w.path) : ''; }).filter(Boolean)
-                : [];
+            var writtenPaths = writtenList.map(function (w) {
+                return w && (w.relPath || w.path) ? String(w.relPath || w.path) : '';
+            }).filter(Boolean);
             console.log('[GitHub upload] ' + formatGitHubUploadLogTime(new Date())
                 + ' succeeded (' + count + ' combined; dirty hkeaa=' + hkeaaDirty
                 + ' aristo=' + aristoDirty + '; wrote ' + writtenPaths.join(', ') + ')');
