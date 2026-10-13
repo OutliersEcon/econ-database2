@@ -307,3 +307,16 @@ body.report-issue-open {
     gap: 0.4rem;
     margin-top: 0.4rem;
 }
+
+.feedback-hub-class-pill.is-blank-only {
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #f59e0b;
+}
+.feedback-hub-class-textarea {
+    width: 100%;
+    min-height: 2.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+}
