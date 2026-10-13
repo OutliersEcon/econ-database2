@@ -130,8 +130,9 @@ class QuestionJsonSource {
     }
 
     async fetchPayload() {
-        // The question bank comes only from the private repository through
-        // Apps Script. A failed proxy call leaves the page without questions.
+        // Private-repo bank via fetchSharedQuestionBank (shard merge-on-load,
+        // else combined database.json). Direct GitHub read or Apps Script
+        // fallback. A failed load leaves the page without questions.
         if (window.databaseReady) {
             const pending = window.databaseReady;
             window.databaseReady = null;

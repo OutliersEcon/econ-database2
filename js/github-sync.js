@@ -273,6 +273,8 @@ function formatGitHubUploadLogTime(date) {
     }
 }
 
+// Uploads the full IndexedDB bank to Apps Script syncDataUpload →
+// combined shared/data/database.json only (no publisher shard write).
 async function uploadQuestionsToGit(options) {
     options = options || {};
     if (!gitSyncState.allowed) {

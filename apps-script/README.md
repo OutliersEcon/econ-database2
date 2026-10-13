@@ -199,7 +199,7 @@ The script builds every GitHub path. The browser does not send paths, and the pa
 
 | What | Where | Who |
 | --- | --- | --- |
-| **Shared question bank** (Upload / Download / Auto-sync) | `<GITHUB_SHARED_PREFIX>/<GITHUB_DATA_PATH>` — default `shared/data/database.json` when `GITHUB_DATA_PATH` is `data/database.json` | Every `githubSync` user reads and writes the **same** file. Username is required for auth only and must **not** appear in the bank path. Paths under `users/` are rejected. |
+| **Shared question bank** (Upload / Download / Auto-sync) | `<GITHUB_SHARED_PREFIX>/<GITHUB_DATA_PATH>` — default `shared/data/database.json` when `GITHUB_DATA_PATH` is `data/database.json` | Every `githubSync` user reads and writes the **same combined** file (full overwrite). Publisher shards are **not** written here (load-only until Phase 3). Username is required for auth only and must **not** appear in the bank path. Paths under `users/` are rejected. |
 | **Personal AI出題 history** (model-reply backups) | `users/<username>/<GITHUB_AI_BACKUP_DIR>/<timestamp>-….json` | Per signed-in user only. Unchanged. |
 
 Recommended Script property: `GITHUB_DATA_PATH` = `data/database.json` (not under `users/`). If the property value already starts with the shared prefix (for example `shared/data/database.json`), the script does not double-prefix.
@@ -261,7 +261,10 @@ If `issueSharedReadToken` fails, the client-safe errors are `github_app_jwt` (PE
 
 Expected layout inside the private repository:
 
-- `shared/data/database.json` — question bank
+- `shared/data/database.json` — **combined** question bank (all publishers). **Upload / Download / Auto-sync (`syncDataUpload` / `syncDataDownload`) still read and write this one file only** (`GITHUB_DATA_PATH`). Full overwrite; no publisher partition; dirty-shard upload is Phase 3 (not implemented).
+- `shared/data/database-hkeaa.json` — HKEAA publisher shard (Phase 1 dual-publish; **load-only** until Phase 3)
+- `shared/data/database-aristo.json` — 雅集出版社 shard (filename `aristo`; mockTests-only on read; **load-only** until Phase 3)
+- Client load (Phase 2): mock → merge both shards; non-mock → HKEAA shard only; any shard failure → combined `database.json` + existing strip
 - `shared/data/ai-explanations.json` — AI解釋 bodies, votes, feedback (not the question bank)
 - `shared/data/issue-reports.json` — user 回報問題 entries (not the question bank)
 - `shared/data/vocabulary.json` — label list
@@ -277,7 +280,7 @@ Expected layout inside the private repository:
 
 `listSharedData` takes `path` (a directory such as `papers/mock-tests`, or empty for the shared root) and optional `recursive: true`. It returns `{ "ok": true, "path", "truncated", "entries": [{ "path", "type", "size" }] }` with at most 8000 entries. `type` is `file` or `dir`.
 
-Both list/fetch actions and `issueSharedReadToken` require a known username (admin, AI editor, mock, or restricted). They do not require `ai` or `githubSync`. Without `mockTests`, `data/database.json` is returned/stripped with mock-test rows removed (Apps Script strip, or client-side strip on direct reads), and `data/database.js`, `build/`, `diagrams/`, `papers/mock-tests/`, and numbered `originals/<digits>/` folders return `feature_unavailable`. `originals/dse/` and `papers/past-papers/` stay available. An unknown username gets `feature_unavailable` and does not receive the bank or a read token. A refused call does not say whether GitHub is configured. There is a per-username cap of 120 shared reads per minute (`rate_limited`). The page loads the bank once, then loads each diagram or original image when it is shown.
+Both list/fetch actions and `issueSharedReadToken` require a known username (admin, AI editor, mock, or restricted). They do not require `ai` or `githubSync`. Without `mockTests`, the client loads `data/database-hkeaa.json` only (does not fetch `database-aristo.json`); `data/database-aristo.json` is mock-only (`sharedMockOnly_`). On combined-file fallback, `data/database.json` is returned/stripped with mock-test rows removed (Apps Script strip, or client-side strip on direct reads). Also refused without `mockTests`: `data/database.js`, `build/`, `diagrams/`, `papers/mock-tests/`, and numbered `originals/<digits>/` folders (`feature_unavailable`). `originals/dse/` and `papers/past-papers/` stay available. An unknown username gets `feature_unavailable` and does not receive the bank or a read token. A refused call does not say whether GitHub is configured. There is a per-username cap of 120 shared reads per minute (`rate_limited`). The page loads the bank once, then loads each diagram or original image when it is shown.
 
 `sharedConfigured` on a GET of `/exec` is true when a shared read can be attempted via Apps Script. `directReadConfigured` is true when App or `GITHUB_READ_TOKEN` credentials are ready. GET does not reveal the prefix or any token.
 
