@@ -810,12 +810,12 @@ async function updateDynamicDropdowns() {
                     counts[v] = (counts[v] || 0) + 1;
                 });
             });
-            // Two-layer: presence (有) → indented detail (簡短／詳盡) → 沒有.
+            // Two-layer: presence (有) → indented detail (詳盡／簡短) → 沒有.
             const noneChecked = !!(window.triStateFilters.ai && window.triStateFilters.ai[labelNone] === 'checked');
             const items = [
                 { value: labelHas, child: false },
-                { value: labelShort, child: true },
                 { value: labelDetailed, child: true },
+                { value: labelShort, child: true },
                 { value: labelNone, child: false }
             ];
             aiContainer.innerHTML = items.map(({ value: item, child }) => {

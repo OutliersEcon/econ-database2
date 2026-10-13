@@ -166,8 +166,8 @@ These are **not** the same as modal `EMPTY_FIELD_SENTINEL` (`__empty__` / label�
 **Two-layer UI** (題目 `#ai-options` and 統計 AI modal), visual order:
 
 1. 有AI解釋
-2. 簡短 (indented child under 有)
-3. 詳盡 (indented child under 有)
+2. 詳盡 (indented child under 有)
+3. 簡短 (indented child under 有)
 4. 沒有AI解釋
 
 Labels stay `AiExplanation.LABEL_*` string keys; match engine unchanged.
