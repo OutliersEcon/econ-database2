@@ -374,7 +374,9 @@ async function fetchSharedAssetDirectOrProxy(rel, timeoutMs) {
 }
 
 // Publisher shards in the private data repo (Phase 2 merge-on-load).
-// Combined data/database.json remains the upload target and load fallback.
+// Combined data/database.json remains the ONLY upload/download sync target
+// (Apps Script GITHUB_DATA_PATH → shared/data/database.json) and the load
+// fallback when shards fail. Dirty-shard upload is Phase 3 — not implemented.
 var SHARED_BANK_COMBINED_REL = 'data/database.json';
 var SHARED_BANK_HKEAA_REL = 'data/database-hkeaa.json';
 var SHARED_BANK_ARISTO_REL = 'data/database-aristo.json';

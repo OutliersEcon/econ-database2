@@ -24,6 +24,10 @@
  * Question-bank upload/download is shared for every githubSync user:
  *   <GITHUB_SHARED_PREFIX>/<GITHUB_DATA_PATH>
  *   e.g. shared/data/database.json
+ * That combined path is the ONLY syncDataUpload / syncDataDownload target
+ * (full overwrite). Publisher shards (database-hkeaa.json / database-aristo.json)
+ * exist for Phase 2 merge-on-load reads; they are NOT written by upload yet
+ * (dirty-shard upload = Phase 3, not implemented).
  * Username is required for auth only and must not appear in the bank path.
  * Bank paths under users/ are rejected.
  * Admin data-checks (ken only, githubSync) use a sibling shared file:
@@ -64,6 +68,8 @@
  * diagrams/…, originals/…, or papers/….
  * Publisher shards (hkeaa / aristo) are readable the same way as database.json
  * for known users; database-aristo.json is mockTests-only (sharedMockOnly_).
+ * Client load merges shards when present (fallback: combined + strip). Upload
+ * still overwrites combined database.json only — do not treat shards as writers.
  * The script reads <prefix>/<relative path> and will not read users/.
  * A static host such as GitHub Pages cannot read a private repository:
  * raw file URLs for a private repo answer 404 unless a token is sent, and
@@ -5236,6 +5242,8 @@ var AI_BACKUP_CONTENT_CHUNK_CHARS_ = 40000;
 var AI_USAGE_RECORD_USERS_ = ['ryan', 'user57'];
 
 // Shared question-bank upload for githubSync users.
+// Writes the combined bank at githubSharedBankPath_ (full overwrite).
+// Does not write database-hkeaa.json / database-aristo.json (Phase 3).
 // Rejects when the client's schemaVersion is older than the cloud bank's.
 function handleGitUpload_(body) {
   var username = normalizeUsername_(body.username);
@@ -6777,6 +6785,8 @@ function githubUserSegment_(username) {
 
 // Shared question-bank path for syncDataUpload / syncDataDownload.
 // Joins GITHUB_SHARED_PREFIX (default shared) with GITHUB_DATA_PATH.
+// Recommended result: shared/data/database.json (combined file only).
+// Does not select publisher shards — upload never partitions by publisher.
 // If dataPath already starts with the shared prefix, do not double-prefix.
 // Rejects any bank path under users/. Username is never part of this path.
 function githubSharedBankPath_(cfg) {
