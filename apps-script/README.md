@@ -159,7 +159,7 @@ Opening the `/exec` URL in a browser should return JSON like `{ "ok": true, "ser
 
 Only `githubSync` (the admin role) sees **自動同步**, **上傳到 GitHub**, and **從 GitHub 載入**. AI editors and restricted users do not see that panel. The checkbox is stored only in that browser’s `localStorage`. It is not sent to the server.
 
-- **上傳到 GitHub** sends the current question bank to `syncDataUpload`. The **browser** first reads the cloud bank and refuses the upload when local `SCHEMA_VERSION` is lower than cloud `schemaVersion` (see site `README.md` / `js/schema-version.js`). **Apps Script also enforces** the same rule in `handleGitUpload_`: reject when the payload’s `schemaVersion` (omit/invalid → 0) is less than the cloud file’s, returning `{ "ok": false, "error": "schema_version_stale", "clientSchemaVersion", "cloudSchemaVersion" }`. The write path preserves `schemaVersion` and other unknown top-level keys (never strips unknowns to “fix” an old client).
+- **上傳到 GitHub** runs Phase 3 dirty-shard upload: partition by exact publisher, compare fingerprints to cloud shards, POST `syncDataUpload` with `files` (dirty shards + combined). The **browser** refuses upload when local `SCHEMA_VERSION` is lower than cloud combined `schemaVersion`. **Apps Script** enforces the same gate **per file written**, allowlists shard paths, and refuses empty shard overwrite (`empty_shard_refused`) unless `confirmEmptyWipe`. Legacy `body.data` still writes combined only. Unknown publishers are rejected client-side before the request.
 - **從 GitHub 載入** calls `syncDataDownload` (or direct shared read) and replaces the browser’s IndexedDB copy. Success responses include `schemaVersion`. If cloud `schemaVersion` is newer than the page, the client shows an update warning.
 - Ken’s admin **資料檢查** panel uses `syncDataChecksDownload` / `syncDataChecksUpload` for `shared/data/data-checks.json` (same proxy; not the question bank). The 題目-tab **進階篩選** modal does not use these actions and must not write that shared file (browser-local only).
 - With **自動同步** on, opening the page tries to load the private copy. Saving, deleting, importing, or exporting a question uploads the current bank. Clearing the database does not upload by itself.
@@ -199,7 +199,7 @@ The script builds every GitHub path. The browser does not send paths, and the pa
 
 | What | Where | Who |
 | --- | --- | --- |
-| **Shared question bank** (Upload / Download / Auto-sync) | `<GITHUB_SHARED_PREFIX>/<GITHUB_DATA_PATH>` — default `shared/data/database.json` when `GITHUB_DATA_PATH` is `data/database.json` | Every `githubSync` user reads and writes the **same combined** file (full overwrite). Publisher shards are **not** written here (load-only until Phase 3). Username is required for auth only and must **not** appear in the bank path. Paths under `users/` are rejected. |
+| **Shared question bank** (Upload / Download / Auto-sync) | `<GITHUB_SHARED_PREFIX>/<GITHUB_DATA_PATH>` — default `shared/data/database.json` when `GITHUB_DATA_PATH` is `data/database.json` | Every `githubSync` user may dirty-write allowlisted shards + combined via `syncDataUpload` `files` (Phase 3). `syncDataDownload` still returns combined. Username is required for auth only and must **not** appear in the bank path. Paths under `users/` are rejected. |
 | **Personal AI出題 history** (model-reply backups) | `users/<username>/<GITHUB_AI_BACKUP_DIR>/<timestamp>-….json` | Per signed-in user only. Unchanged. |
 
 Recommended Script property: `GITHUB_DATA_PATH` = `data/database.json` (not under `users/`). If the property value already starts with the shared prefix (for example `shared/data/database.json`), the script does not double-prefix.
@@ -261,10 +261,11 @@ If `issueSharedReadToken` fails, the client-safe errors are `github_app_jwt` (PE
 
 Expected layout inside the private repository:
 
-- `shared/data/database.json` — **combined** question bank (all publishers). **Upload / Download / Auto-sync (`syncDataUpload` / `syncDataDownload`) still read and write this one file only** (`GITHUB_DATA_PATH`). Full overwrite; no publisher partition; dirty-shard upload is Phase 3 (not implemented).
-- `shared/data/database-hkeaa.json` — HKEAA publisher shard (Phase 1 dual-publish; **load-only** until Phase 3)
-- `shared/data/database-aristo.json` — 雅集出版社 shard (filename `aristo`; mockTests-only on read; **load-only** until Phase 3)
+- `shared/data/database.json` — **combined** question bank (all publishers). `syncDataDownload` still reads this file. **Upload (Phase 3):** `syncDataUpload` accepts `files: [{ path, data }, …]` for allowlisted `data/database-hkeaa.json`, `data/database-aristo.json`, and `data/database.json` under one lock (schema gate per file; empty shard overwrite refused unless `confirmEmptyWipe`). Legacy `body.data` still writes combined only. Client dirty-shard upload dual-writes combined whenever a shard is dirty.
+- `shared/data/database-hkeaa.json` — HKEAA publisher shard (load + dirty upload)
+- `shared/data/database-aristo.json` — 雅集出版社 shard (filename `aristo`; mockTests-only on read; load + dirty upload)
 - Client load (Phase 2): mock → merge both shards; non-mock → HKEAA shard only; any shard failure → combined `database.json` + existing strip
+- Approve (`approveClassificationProposal` / `approveQuestionPartsProposal` + bulk): patch owning shard by `questionId` / publisher and dual-write combined
 - `shared/data/ai-explanations.json` — AI解釋 bodies, votes, feedback (not the question bank)
 - `shared/data/issue-reports.json` — user 回報問題 entries (not the question bank)
 - `shared/data/vocabulary.json` — label list
