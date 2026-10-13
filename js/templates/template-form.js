@@ -149,18 +149,22 @@ function renderFormTemplate() {
                 <div class="form-group">
                     <label for="chapter-classification">Aristo Chapters (用逗號分隔)</label>
                     <input type="text" id="chapter-classification" placeholder="Ch01, Ch02, ...">
+                    <div id="chapter-classification-badges" class="form-tag-badges" aria-live="polite"></div>
                 </div>
                 <div class="form-group">
                     <label for="concepts">涉及概念 (標籤，用逗號分隔)</label>
                     <input type="text" id="concepts">
+                    <div id="concepts-badges" class="form-tag-badges" aria-live="polite"></div>
                 </div>
                 <div class="form-group">
                     <label for="patterns">題型標籤 (用逗號分隔)</label>
                     <input type="text" id="patterns">
+                    <div id="patterns-badges" class="form-tag-badges" aria-live="polite"></div>
                 </div>
                 <div class="form-group">
                     <label for="stemPatterns">題幹模式 (用逗號分隔)</label>
                     <input type="text" id="stemPatterns">
+                    <div id="stemPatterns-badges" class="form-tag-badges" aria-live="polite"></div>
                 </div>
                 <div class="form-group">
                     <label for="option-design">選項設計</label>
