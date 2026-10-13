@@ -43,6 +43,7 @@ Constraint: map + pain points + bugs; prefer consolidations and small fixes over
 ┌─ ConditionMatch (condition-match.js) ─────────────────────────────┐
 │  Shared by: advanced-filter.js, data-checks.js                     │
 │  Field catalog, normalize, AND match, autocomplete collect         │
+│  data-checks adds modes (perQuestion | crossPaperSameYear) on top  │
 │  feature → questionFeatureOn (question-fields.js)                  │
 │  Applied on 題目 list via window.advancedFilter in applyFilters    │
 └────────────────────────────────────────────────────────────────────┘
@@ -164,9 +165,12 @@ Legacy `question.AIExplanation` URL is ignored (schema v3 comment).
 
 ### 2.9 `data-checks.js` + ConditionMatch
 
-- Reuses `ConditionMatch.normalizeCondition` / `matchesAllConditions` / `collectFieldValues`.
-- Own overlay UI (nearly parallel row markup to 進階篩選).
--「篩選全部待處理」→ `applyQuestionIdSetFilter` (ID set, not advancedFilter).
+- Reuses `ConditionMatch.normalizeCondition` / `matchesAllConditions` / `collectFieldValues` for the condition rows (still AND).
+- Check **mode** (persisted on each check JSON as `mode`):
+  - `perQuestion` (default; omit or explicit; UI「普通檢查」) — every condition match minus exceptions needs handling (same as historically).
+  - `crossPaperSameYear` (UI「同年跨卷重疊」) — same condition match, then group by `examination` + year (`normalizeYearFilterKey` when available); hit only if the group has ≥2 distinct non-empty `paper` values; `needsHandling` = matching IDs in hit groups minus exceptions. Results show a 重疊年份(+exam/卷別) summary.
+- Own overlay UI (nearly parallel row markup to 進階篩選) plus a mode selector on add/edit.
+-「篩選全部待處理」→ `applyQuestionIdSetFilter` (ID set, not advancedFilter); works for both modes.
 - Syncs check definitions to GitHub; advanced filter does not.
 
 ---
