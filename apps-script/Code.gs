@@ -150,7 +150,7 @@
  * 分類提案 staging (shared/data/classification-proposals.json; concepts / stemPatterns):
  *   listClassificationProposals       → handleListClassificationProposals_       (admin)
  *   submitClassificationProposal      → handleSubmitClassificationProposal_      (admin|githubSync; pause≥200)
- *   approveClassificationProposal     → handleApproveClassificationProposal_     (admin; bank patch; per-field + edited values)
+ *   approveClassificationProposal     → handleApproveClassificationProposal_     (admin; shard bank patch; multi-field + blank-only)
  *   bulkApproveClassificationProposals → handleBulkApproveClassificationProposals_ (admin; bank patch)
  *   rejectClassificationProposal      → handleRejectClassificationProposal_      (admin; optional rejectFields keeps other fields)
  *   bulkRejectClassificationProposals → handleBulkRejectClassificationProposals_ (admin)
@@ -2917,14 +2917,39 @@ function handleRejectQuestionPartsProposal_(body) {
 // === 分類提案 staging (shared/data/classification-proposals.json) ===
 // Agents propose concepts / stemPatterns here. Only approve patches the shared
 // bank (database.json). Propose never touches the bank. Pending-only file:
-// approve and reject both remove the staging row. Intake pauses at 200 pending.
+// Multi-field staging (list/scalar/parts). Blank-only fields skip when filled.
+// approve and reject both remove staging fields/rows. Intake pauses at 200 pending.
 
 var CLASSIFICATION_PROPOSALS_REL_PATH_ = 'data/classification-proposals.json';
 var CLASSIFICATION_PROPOSALS_MAX_BYTES_ = 2000000;
 var CLASSIFICATION_PROPOSALS_MAX_ITEMS_ = 5000;
 var CLASSIFICATION_PROPOSALS_SCHEMA_VERSION_ = 1;
 var CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_ = 200;
-var CLASSIFICATION_ALLOWED_FIELDS_ = { concepts: true, stemPatterns: true };
+// Bank field keys + kinds. blankOnly = propose/approve only when bank value empty.
+var CLASSIFICATION_FIELD_META_ = {
+  concepts: { kind: 'list', label: '概念', blankOnly: false },
+  stemPatterns: { kind: 'list', label: '題幹模式', blankOnly: false },
+  patterns: { kind: 'list', label: '題型', blankOnly: false },
+  graphType: { kind: 'scalar', label: '圖表類型', blankOnly: false },
+  tableType: { kind: 'scalar', label: '表格類型', blankOnly: false },
+  calculationType: { kind: 'scalar', label: '計算類型', blankOnly: false },
+  multipleSelectionType: { kind: 'scalar', label: '複選類型', blankOnly: false },
+  AristochapterClassification: { kind: 'list', label: 'Chapters', blankOnly: true },
+  curriculumClassification: { kind: 'list', label: '課程分類', blankOnly: true },
+  questionParts: { kind: 'parts', label: '分題', blankOnly: true }
+};
+var CLASSIFICATION_ALLOWED_FIELDS_ = (function () {
+  var out = {};
+  Object.keys(CLASSIFICATION_FIELD_META_).forEach(function (k) { out[k] = true; });
+  return out;
+})();
+var CLASSIFICATION_ALWAYS_FIELDS_ = [
+  'concepts', 'stemPatterns', 'patterns',
+  'graphType', 'tableType', 'calculationType', 'multipleSelectionType'
+];
+var CLASSIFICATION_BLANK_ONLY_FIELDS_ = [
+  'AristochapterClassification', 'curriculumClassification', 'questionParts'
+];
 var CLASSIFICATION_CONFIDENCE_ = { '高': true, '中': true, '低': true };
 
 function githubSharedClassificationProposalsPath_(cfg) {
@@ -2987,6 +3012,25 @@ function writeClassificationProposalsStore_(cfg, store, message) {
   return { sha: written.sha, path: path, store: store };
 }
 
+function classificationFieldMeta_(field) {
+  return CLASSIFICATION_FIELD_META_[String(field || '')] || null;
+}
+
+function classificationFieldKind_(field) {
+  var meta = classificationFieldMeta_(field);
+  return meta ? meta.kind : '';
+}
+
+function classificationFieldBlankOnly_(field) {
+  var meta = classificationFieldMeta_(field);
+  return !!(meta && meta.blankOnly);
+}
+
+function classificationFieldLabel_(field) {
+  var meta = classificationFieldMeta_(field);
+  return meta && meta.label ? meta.label : String(field || '');
+}
+
 function normalizeClassificationStringList_(raw) {
   var out = [];
   var seen = {};
@@ -3013,6 +3057,57 @@ function normalizeClassificationStringList_(raw) {
   return out;
 }
 
+function normalizeClassificationScalar_(raw) {
+  if (Array.isArray(raw)) {
+    for (var i = 0; i < raw.length; i++) {
+      var s = String(raw[i] == null ? '' : raw[i]).trim();
+      if (s) return s;
+    }
+    return '';
+  }
+  if (raw == null) return '';
+  return String(raw).trim();
+}
+
+function normalizeClassificationFieldValue_(field, raw) {
+  var kind = classificationFieldKind_(field);
+  if (kind === 'scalar') return normalizeClassificationScalar_(raw);
+  if (kind === 'parts') return normalizeProposalParts_(raw);
+  return normalizeClassificationStringList_(raw);
+}
+
+function classificationValueIsEmpty_(field, value) {
+  var kind = classificationFieldKind_(field);
+  if (kind === 'scalar') return !String(value == null ? '' : value).trim();
+  if (kind === 'parts') return !Array.isArray(value) || !value.length;
+  return !Array.isArray(value) || !value.length;
+}
+
+function classificationValuesEqual_(field, a, b) {
+  var kind = classificationFieldKind_(field);
+  if (kind === 'scalar') {
+    return normalizeClassificationScalar_(a) === normalizeClassificationScalar_(b);
+  }
+  if (kind === 'parts') {
+    var left = normalizeProposalParts_(a);
+    var right = normalizeProposalParts_(b);
+    if (left.length !== right.length) return false;
+    for (var i = 0; i < left.length; i++) {
+      if (left[i].label !== right[i].label) return false;
+      if (left[i].marks !== right[i].marks) return false;
+      if (left[i].performance !== right[i].performance) return false;
+    }
+    return true;
+  }
+  var la = normalizeClassificationStringList_(a);
+  var lb = normalizeClassificationStringList_(b);
+  if (la.length !== lb.length) return false;
+  for (var j = 0; j < la.length; j++) {
+    if (la[j] !== lb[j]) return false;
+  }
+  return true;
+}
+
 function normalizeClassificationFields_(raw) {
   var out = [];
   var seen = {};
@@ -3036,13 +3131,27 @@ function normalizeClassificationConfidence_(raw) {
   return '';
 }
 
+function bankClassificationValue_(question, field) {
+  if (!question) return normalizeClassificationFieldValue_(field, null);
+  return normalizeClassificationFieldValue_(field, question[field]);
+}
+
 function bankClassificationList_(question, field) {
-  if (!question) return [];
-  return normalizeClassificationStringList_(question[field]);
+  var kind = classificationFieldKind_(field);
+  var value = bankClassificationValue_(question, field);
+  if (kind === 'scalar') return value ? [value] : [];
+  if (kind === 'parts') {
+    return normalizeProposalParts_(value).map(function (p) {
+      return p.label + ',' + (p.marks == null ? '' : String(p.marks))
+        + (p.performance ? ',' + p.performance : '');
+    });
+  }
+  return Array.isArray(value) ? value : [];
 }
 
 function bankClassificationFieldFilled_(question, field) {
-  return bankClassificationList_(question, field).length > 0;
+  if (field === 'questionParts') return bankQuestionHasFilledParts_(question);
+  return !classificationValueIsEmpty_(field, bankClassificationValue_(question, field));
 }
 
 function bankQuestionReviewedByAi_(question) {
@@ -3059,6 +3168,18 @@ function classificationListsEqual_(a, b) {
   return true;
 }
 
+function applyClassificationValueToQuestion_(question, field, value) {
+  if (!question) return;
+  var kind = classificationFieldKind_(field);
+  var normalized = normalizeClassificationFieldValue_(field, value);
+  if (kind === 'parts') {
+    question.questionParts = normalized;
+    question.partsStatus = normalized.length ? 'filled' : 'none';
+    return;
+  }
+  question[field] = normalized;
+}
+
 function publicClassificationProposalView_(row) {
   if (!row || typeof row !== 'object') return null;
   var fields = normalizeClassificationFields_(row.fields);
@@ -3073,8 +3194,8 @@ function publicClassificationProposalView_(row) {
   var i;
   for (i = 0; i < fields.length; i++) {
     var f = fields[i];
-    currentOut[f] = normalizeClassificationStringList_(currentValues[f]);
-    proposedOut[f] = normalizeClassificationStringList_(proposedValues[f]);
+    currentOut[f] = normalizeClassificationFieldValue_(f, currentValues[f]);
+    proposedOut[f] = normalizeClassificationFieldValue_(f, proposedValues[f]);
   }
   return {
     id: String(row.id || ''),
@@ -3124,10 +3245,10 @@ function removeClassificationProposalAt_(store, index) {
 function publicBankClassificationSnapshot_(question, fields) {
   if (!question) return null;
   var keys = normalizeClassificationFields_(fields);
-  if (!keys.length) keys = ['concepts', 'stemPatterns'];
+  if (!keys.length) keys = CLASSIFICATION_ALWAYS_FIELDS_.slice();
   var values = {};
   for (var i = 0; i < keys.length; i++) {
-    values[keys[i]] = bankClassificationList_(question, keys[i]);
+    values[keys[i]] = bankClassificationValue_(question, keys[i]);
   }
   return {
     questionId: String(question.id || ''),
@@ -3189,12 +3310,27 @@ function classificationWriteValuesFromBody_(body, approveFields, proposedValues)
   for (var i = 0; i < approveFields.length; i++) {
     var f = approveFields[i];
     if (Object.prototype.hasOwnProperty.call(edited, f)) {
-      out[f] = normalizeClassificationStringList_(edited[f]);
+      out[f] = normalizeClassificationFieldValue_(f, edited[f]);
     } else {
-      out[f] = normalizeClassificationStringList_(proposed[f]);
+      out[f] = normalizeClassificationFieldValue_(f, proposed[f]);
     }
   }
   return out;
+}
+
+/** Split approve fields into writable vs blank-only blocked (bank already filled). */
+function partitionBlankOnlyApproveFields_(question, approveFields) {
+  var allowed = [];
+  var blocked = [];
+  for (var i = 0; i < approveFields.length; i++) {
+    var f = approveFields[i];
+    if (classificationFieldBlankOnly_(f) && bankClassificationFieldFilled_(question, f)) {
+      blocked.push(f);
+    } else {
+      allowed.push(f);
+    }
+  }
+  return { allowed: allowed, blocked: blocked };
 }
 
 function classificationNeedsOverwriteConfirm_(question, fields) {
@@ -3256,48 +3392,49 @@ function prepareClassificationProposalItem_(item, defaultCreatedBy) {
   var proposedValuesRaw = item.proposedValues && typeof item.proposedValues === 'object'
     ? item.proposedValues
     : {};
-  // Convenience: top-level concepts / stemPatterns map into proposedValues.
-  if (item.concepts != null && proposedValuesRaw.concepts == null) {
-    proposedValuesRaw.concepts = item.concepts;
-  }
-  if (item.stemPatterns != null && proposedValuesRaw.stemPatterns == null) {
-    proposedValuesRaw.stemPatterns = item.stemPatterns;
-  }
+  // Convenience: top-level known fields map into proposedValues.
+  Object.keys(CLASSIFICATION_FIELD_META_).forEach(function (key) {
+    if (item[key] != null && proposedValuesRaw[key] == null) {
+      proposedValuesRaw[key] = item[key];
+    }
+  });
 
   var fields = normalizeClassificationFields_(item.fields);
   if (!fields.length) {
-    if (proposedValuesRaw.concepts != null) fields.push('concepts');
-    if (proposedValuesRaw.stemPatterns != null) fields.push('stemPatterns');
+    Object.keys(CLASSIFICATION_FIELD_META_).forEach(function (key) {
+      if (Object.prototype.hasOwnProperty.call(proposedValuesRaw, key)) fields.push(key);
+    });
   }
   if (!fields.length) return null;
-
-  var proposedValues = {};
-  var hasAnyProposed = false;
-  var i;
-  for (i = 0; i < fields.length; i++) {
-    var f = fields[i];
-    var list = normalizeClassificationStringList_(proposedValuesRaw[f]);
-    proposedValues[f] = list;
-    if (list.length) hasAnyProposed = true;
-  }
-  // Allow explicit empty array to clear a field (still a proposal).
-  if (!hasAnyProposed) {
-    for (i = 0; i < fields.length; i++) {
-      if (Object.prototype.hasOwnProperty.call(proposedValuesRaw, fields[i])) {
-        hasAnyProposed = true;
-        break;
-      }
-    }
-  }
-  if (!hasAnyProposed) return null;
 
   var currentValuesRaw = item.currentValues && typeof item.currentValues === 'object'
     ? item.currentValues
     : {};
   var currentValues = {};
+  var proposedValues = {};
+  var hasAnyProposed = false;
+  var keptFields = [];
+  var skippedBlankOnly = [];
+  var i;
   for (i = 0; i < fields.length; i++) {
-    currentValues[fields[i]] = normalizeClassificationStringList_(currentValuesRaw[fields[i]]);
+    var f = fields[i];
+    var currentVal = normalizeClassificationFieldValue_(f, currentValuesRaw[f]);
+    var proposedVal = normalizeClassificationFieldValue_(f, proposedValuesRaw[f]);
+    // Soft blank-only gate on submit when currentValues show the bank field filled.
+    if (classificationFieldBlankOnly_(f) && !classificationValueIsEmpty_(f, currentVal)) {
+      skippedBlankOnly.push(f);
+      continue;
+    }
+    currentValues[f] = currentVal;
+    proposedValues[f] = proposedVal;
+    keptFields.push(f);
+    if (!classificationValueIsEmpty_(f, proposedVal)
+        || Object.prototype.hasOwnProperty.call(proposedValuesRaw, f)) {
+      hasAnyProposed = true;
+    }
   }
+  fields = keptFields;
+  if (!fields.length || !hasAnyProposed) return null;
 
   var reason = String(item.reason == null ? '' : item.reason).trim();
   if (reason.length > 2000) reason = reason.slice(0, 2000);
@@ -3597,15 +3734,6 @@ function handleApproveClassificationProposal_(body) {
       };
     }
 
-    var writeValues = classificationWriteValuesFromBody_(body, approveFields, view.proposedValues);
-    var proposedSnap = {
-      questionId: questionId,
-      fields: approveFields,
-      values: writeValues,
-      reason: view.reason,
-      confidence: view.confidence
-    };
-
     var loadedBank = readSharedBankForPartsApprove_(cfg);
     var qIndex = findBankQuestionIndex_(loadedBank.bank, questionId);
     if (qIndex < 0) {
@@ -3615,6 +3743,59 @@ function handleApproveClassificationProposal_(body) {
       return { ok: false, error: 'not_found', message: '題庫找不到題目 ' + questionId };
     }
     var live = loadedBank.bank.questions[qIndex];
+
+    // Blank-only fields never overwrite a filled bank value (confirmOverwrite ignored).
+    var blankSplit = partitionBlankOnlyApproveFields_(live, approveFields);
+    var blockedBlankOnly = blankSplit.blocked;
+    if (blockedBlankOnly.length) {
+      rejectFields = rejectFields.concat(blockedBlankOnly.filter(function (f) {
+        return rejectFields.indexOf(f) < 0;
+      }));
+      approveFields = blankSplit.allowed;
+    }
+    if (!approveFields.length) {
+      // Nothing writable: drop blocked blank-only (+ any rejectFields) from staging.
+      var dropOnly = rejectFields.slice();
+      var remainingOnly = trimClassificationProposalFields_(proposal, dropOnly);
+      var proposalRemainingOnly = null;
+      if (remainingOnly <= 0) {
+        removeClassificationProposalAt_(loadedProposals.store, found.index);
+      } else {
+        loadedProposals.store.proposals[found.index] = proposal;
+        proposalRemainingOnly = publicClassificationProposalView_(proposal);
+      }
+      var proposalsWrittenBlocked = writeClassificationProposalsStore_(
+        cfg,
+        loadedProposals.store,
+        'Drop blank-only filled classification fields for ' + questionId
+      );
+      lock.releaseLock();
+      held = false;
+      releaseGitSlot_(username);
+      return {
+        ok: false,
+        error: 'blank_only_filled',
+        message: '空白才可寫入的欄位在題庫已有值，已略過：'
+          + blockedBlankOnly.map(classificationFieldLabel_).join('、'),
+        questionId: questionId,
+        proposalId: String(proposal.id || ''),
+        blockedFields: blockedBlankOnly,
+        rejectedFields: dropOnly,
+        proposalRemaining: proposalRemainingOnly,
+        removed: remainingOnly <= 0,
+        proposalsSha: proposalsWrittenBlocked.sha,
+        proposalsPath: proposalsWrittenBlocked.path
+      };
+    }
+
+    var writeValues = classificationWriteValuesFromBody_(body, approveFields, view.proposedValues);
+    var proposedSnap = {
+      questionId: questionId,
+      fields: approveFields,
+      values: writeValues,
+      reason: view.reason,
+      confidence: view.confidence
+    };
     var currentSnap = publicBankClassificationSnapshot_(live, approveFields);
 
     if (classificationNeedsOverwriteConfirm_(live, approveFields) && !confirmOverwrite) {
@@ -3628,6 +3809,7 @@ function handleApproveClassificationProposal_(body) {
         questionId: questionId,
         approveFields: approveFields,
         rejectFields: rejectFields,
+        blockedFields: blockedBlankOnly,
         current: currentSnap,
         proposed: proposedSnap,
         reviewedByAI: String(live.reviewedByAI || ''),
@@ -3639,7 +3821,7 @@ function handleApproveClassificationProposal_(body) {
 
     var fi;
     for (fi = 0; fi < approveFields.length; fi++) {
-      live[approveFields[fi]] = writeValues[approveFields[fi]];
+      applyClassificationValueToQuestion_(live, approveFields[fi], writeValues[approveFields[fi]]);
     }
     loadedBank.bank.questions[qIndex] = live;
 
@@ -3688,6 +3870,7 @@ function handleApproveClassificationProposal_(body) {
       proposalId: String(proposal.id || ''),
       approvedFields: approveFields,
       rejectedFields: rejectFields,
+      blockedFields: blockedBlankOnly,
       question: publicBankClassificationSnapshot_(live, approveFields),
       proposalRemaining: remaining,
       removed: left <= 0,
@@ -3785,29 +3968,67 @@ function handleBulkApproveClassificationProposals_(body) {
         continue;
       }
       var live = loadedBank.bank.questions[qIndex];
-      if (classificationNeedsOverwriteConfirm_(live, fields) && !confirmOverwrite) {
+      var blankSplit = partitionBlankOnlyApproveFields_(live, fields);
+      var writable = blankSplit.allowed;
+      if (!writable.length) {
+        failed.push({
+          proposalId: proposalId,
+          questionId: questionId,
+          error: 'blank_only_filled',
+          message: '空白才可寫入的欄位在題庫已有值：'
+            + blankSplit.blocked.map(classificationFieldLabel_).join('、'),
+          blockedFields: blankSplit.blocked
+        });
+        // Drop blocked blank-only fields from staging so they do not stick forever.
+        trimClassificationProposalFields_(found.proposal, blankSplit.blocked);
+        if (!(found.proposal.fields && found.proposal.fields.length)) {
+          removeIndexes.push(found.index);
+        }
+        continue;
+      }
+      if (blankSplit.blocked.length) {
+        trimClassificationProposalFields_(found.proposal, blankSplit.blocked);
+        fields = writable;
+        view = publicClassificationProposalView_(found.proposal);
+      }
+      if (classificationNeedsOverwriteConfirm_(live, writable) && !confirmOverwrite) {
         needsConfirm.push({
           proposalId: String(found.proposal.id || proposalId),
           questionId: questionId,
-          current: publicBankClassificationSnapshot_(live, fields),
+          current: publicBankClassificationSnapshot_(live, writable),
           proposed: {
             questionId: questionId,
-            fields: fields,
-            values: view.proposedValues
+            fields: writable,
+            values: (function () {
+              var vals = {};
+              for (var wi = 0; wi < writable.length; wi++) {
+                vals[writable[wi]] = normalizeClassificationFieldValue_(
+                  writable[wi],
+                  view.proposedValues[writable[wi]]
+                );
+              }
+              return vals;
+            })()
           },
-          reviewedByAI: String(live.reviewedByAI || '')
+          reviewedByAI: String(live.reviewedByAI || ''),
+          blockedFields: blankSplit.blocked
         });
         continue;
       }
-      for (var fi = 0; fi < fields.length; fi++) {
-        live[fields[fi]] = normalizeClassificationStringList_(view.proposedValues[fields[fi]]);
+      for (var fi = 0; fi < writable.length; fi++) {
+        applyClassificationValueToQuestion_(
+          live,
+          writable[fi],
+          view.proposedValues[writable[fi]]
+        );
       }
       loadedBank.bank.questions[qIndex] = live;
       removeIndexes.push(found.index);
       approved.push({
         proposalId: String(found.proposal.id || proposalId),
         questionId: questionId,
-        question: publicBankClassificationSnapshot_(live, fields)
+        question: publicBankClassificationSnapshot_(live, writable),
+        blockedFields: blankSplit.blocked
       });
     }
 

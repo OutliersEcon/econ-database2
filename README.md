@@ -135,7 +135,7 @@ Form / 批量編輯 can still edit parts directly on the bank. Redeploy Apps Scr
 
 **Only write path for classification:** 分類專員 → staging → 審批與回報 → 分類審批. Retired Python batch entry points: `archive/classification-python/`.
 
-AI / review bots must **not** write `concepts` or `stemPatterns` straight into `database.json`. They call Apps Script `submitClassificationProposal` (`admin` or `githubSync`), which upserts pending rows in `shared/data/classification-proposals.json` (one pending proposal per `questionId`; fields may be `concepts` and/or `stemPatterns`). **Submit never touches the bank.**
+AI / review bots must **not** write `concepts` or `stemPatterns` straight into `database.json`. They call Apps Script `submitClassificationProposal` (`admin` or `githubSync`), which upserts pending rows in `shared/data/classification-proposals.json` (one pending proposal per `questionId`). Always-eligible fields: `concepts`, `stemPatterns`, `patterns`, `graphType`, `tableType`, `calculationType`, `multipleSelectionType`. Blank-only (empty bank only): `AristochapterClassification`, `curriculumClassification`, `questionParts`. **Submit never touches the bank.**
 
 **Pause at 200:** when pending count ≥ 200, new-question intake is rejected with `{ ok:false, paused:true, pendingCount, pauseThreshold:200 }`. Replacing an existing pending `questionId` is still allowed. The admin **分類審批** tab shows a paused banner when the backlog is at the limit.
 
@@ -145,9 +145,9 @@ AI / review bots must **not** write `concepts` or `stemPatterns` straight into `
   "action": "submitClassificationProposal",
   "username": "…",
   "questionId": "DSE-…",
-  "fields": ["concepts", "stemPatterns"],
-  "currentValues": { "concepts": ["…"], "stemPatterns": ["…"] },
-  "proposedValues": { "concepts": ["…"], "stemPatterns": ["…"] },
+  "fields": ["concepts", "stemPatterns", "patterns", "graphType"],
+  "currentValues": { "concepts": ["…"], "stemPatterns": ["…"], "patterns": [], "graphType": "" },
+  "proposedValues": { "concepts": ["…"], "stemPatterns": ["…"], "patterns": ["…"], "graphType": "供求圖" },
   "reason": "optional",
   "confidence": "高|中|低|",
   "createdBy": "Econ 分類審核"
@@ -219,7 +219,7 @@ Shared bank JSON (`shared/data/database.json`) carries an integer root field `sc
 | 5 | 回報問題 side-file contract (`shared/data/issue-reports.json`) |
 | 6 | issue-reports + AI解釋 feedback `status` (open\|resolved) |
 | 7 | 分題提案 staging (`shared/data/question-parts-proposals.json`) |
-| 8 | 分類提案 staging (`shared/data/classification-proposals.json`; concepts / stemPatterns; pause ≥200) |
+| 8 | 分類提案 staging (`shared/data/classification-proposals.json`; multi-field; pause ≥200) |
 
 - **Upload / auto-sync:** before `syncDataUpload`, the client reads the cloud file and **blocks** if local `SCHEMA_VERSION` &lt; cloud `schemaVersion`, with a Traditional Chinese error (cloud written by a newer app — update before uploading). No merge that strips unknown fields. **Apps Script `handleGitUpload_` enforces the same gate** (`schema_version_stale` + client/cloud versions) and preserves `schemaVersion` / unknown top-level keys on write. Redeploy `Code.gs` after that change.
 - **Load / download / file import:** if cloud/file `schemaVersion` &gt; local, show a **warning notification** asking the user to update. If the payload has no usable `questions` array, the load fails clearly instead of half-importing. `syncDataDownload` returns `schemaVersion` for client notify.
@@ -232,7 +232,7 @@ Set `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_BRANCH`, `GITHUB_DATA
 
 ## Classification write path (only) / 分類寫入路徑（唯一）
 
-**Do not write `concepts` or `stemPatterns` straight into `database.json` / publisher shards** from Python, local batch scripts, or ad-hoc GitHub Contents API edits.
+**Do not write classification fields (`concepts`, `stemPatterns`, `patterns`, type scalars, chapters, curriculum, `questionParts`, …) straight into `database.json` / publisher shards** from Python, local batch scripts, or ad-hoc GitHub Contents API edits.
 
 Canonical path:
 

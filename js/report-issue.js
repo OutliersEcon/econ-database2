@@ -1,7 +1,7 @@
 // 回報問題 — UI for any authenticated session; Apps Script reportIssue requires
 // a known hash (rights.known). Persist: shared/data/issue-reports.json
 // (reportIssue / listIssueReports / update*Status). Admin hub「審批與回報」
-// combines AI解釋 Feedback、問題回報、分題審批、分類審批 (concepts / stemPatterns).
+// combines AI解釋 Feedback、問題回報、分題審批、分類審批 (multi-field staging).
 // Dependencies: access-rights, github-sync (gitProxyRequest / gitUsername),
 // optional PoeGenerate.proxyRequest, AiExplanation admin hooks, question-fields.
 
@@ -30,6 +30,37 @@
         tags: {},
         busy: false
     };
+    var CLASS_FIELD_META = {
+        concepts: { kind: 'list', label: '概念', blankOnly: false },
+        stemPatterns: { kind: 'list', label: '題幹模式', blankOnly: false },
+        patterns: { kind: 'list', label: '題型', blankOnly: false },
+        graphType: { kind: 'scalar', label: '圖表類型', blankOnly: false },
+        tableType: { kind: 'scalar', label: '表格類型', blankOnly: false },
+        calculationType: { kind: 'scalar', label: '計算類型', blankOnly: false },
+        multipleSelectionType: { kind: 'scalar', label: '複選類型', blankOnly: false },
+        AristochapterClassification: { kind: 'list', label: 'Chapters', blankOnly: true },
+        curriculumClassification: { kind: 'list', label: '課程分類', blankOnly: true },
+        questionParts: { kind: 'parts', label: '分題', blankOnly: true }
+    };
+
+    function classFieldMeta(field) {
+        return CLASS_FIELD_META[String(field || '')] || null;
+    }
+
+    function classFieldLabel(field) {
+        var meta = classFieldMeta(field);
+        return meta && meta.label ? meta.label : String(field || '');
+    }
+
+    function classFieldKind(field) {
+        var meta = classFieldMeta(field);
+        return meta ? meta.kind : 'list';
+    }
+
+    function isAllowedClassField(field) {
+        return !!classFieldMeta(field);
+    }
+
     var hubState = {
         tab: 'issues', // issues | ai | parts | classification
         issues: [],
@@ -785,17 +816,42 @@
                 var current = row.currentValues || {};
                 var proposed = row.proposedValues || {};
                 var fieldBlocks = fields.map(function (field) {
-                    var label = field === 'stemPatterns' ? '題幹模式' : (field === 'concepts' ? '概念' : field);
-                    var proposedList = Array.isArray(proposed[field]) ? proposed[field] : [];
-                    var isClear = !proposedList.length;
+                    var label = classFieldLabel(field);
+                    var kind = classFieldKind(field);
+                    var meta = classFieldMeta(field);
+                    var proposedVal = proposed[field];
+                    var isClear = classValueIsEmpty(field, proposedVal);
                     var clearPill = isClear
                         ? ' <span class="feedback-hub-class-pill is-clear" title="通過此欄會清空題庫該欄">清空</span>'
                         : '';
-                    var editText = classListToEditText(proposedList);
+                    var blankPill = meta && meta.blankOnly
+                        ? ' <span class="feedback-hub-class-pill is-blank-only" title="僅當題庫此欄空白時可寫入">空白才寫</span>'
+                        : '';
+                    var editText = classValueToEditText(field, proposedVal);
+                    var placeholder = kind === 'parts'
+                        ? 'a,2,良好 | b,3,優良；留空＝通過時清空'
+                        : (kind === 'scalar'
+                            ? '單一值；留空＝通過時清空'
+                            : '逗號分隔；留空＝通過時清空');
+                    var inputTag = kind === 'parts'
+                        ? ('<textarea class="feedback-hub-class-input feedback-hub-class-textarea" rows="2"'
+                            + ' data-class-edit-field="' + esc(field) + '" placeholder="'
+                            + esc(placeholder) + '">' + esc(editText) + '</textarea>')
+                        : ('<input type="text" class="feedback-hub-class-input" data-class-edit-field="'
+                            + esc(field) + '" value="' + esc(editText)
+                            + '" placeholder="' + esc(placeholder) + '" autocomplete="off">');
+                    var currentFilled = !classValueIsEmpty(field, current[field]);
+                    var approveDisabled = meta && meta.blankOnly && currentFilled;
+                    var approveBtn = approveDisabled
+                        ? ('<button type="button" class="btn btn-primary btn-sm" disabled'
+                            + ' title="題庫此欄已有值（空白才可寫入）">通過此欄</button>')
+                        : ('<button type="button" class="btn btn-primary btn-sm" data-class-id="'
+                            + esc(id) + '" data-class-approve-field="' + esc(field) + '">通過此欄</button>');
                     return ''
-                        + '<div class="feedback-hub-class-field" data-class-field="' + esc(field) + '">'
+                        + '<div class="feedback-hub-class-field" data-class-field="' + esc(field) + '"'
+                        + ' data-class-kind="' + esc(kind) + '">'
                         + '  <div class="feedback-hub-class-field-head">'
-                        + '    <strong>' + esc(label) + '</strong>' + clearPill
+                        + '    <strong>' + esc(label) + '</strong>' + clearPill + blankPill
                         + '  </div>'
                         + '  <div class="feedback-hub-class-diff">'
                         + '    <span class="feedback-hub-class-label">現有</span>'
@@ -803,13 +859,10 @@
                         + '  </div>'
                         + '  <div class="feedback-hub-class-diff feedback-hub-class-edit">'
                         + '    <span class="feedback-hub-class-label">提案</span>'
-                        + '    <input type="text" class="feedback-hub-class-input" data-class-edit-field="'
-                        + esc(field) + '" value="' + esc(editText)
-                        + '" placeholder="逗號分隔；留空＝通過時清空" autocomplete="off">'
+                        + '    ' + inputTag
                         + '  </div>'
                         + '  <div class="feedback-hub-class-field-actions">'
-                        + '    <button type="button" class="btn btn-primary btn-sm" data-class-id="'
-                        + esc(id) + '" data-class-approve-field="' + esc(field) + '">通過此欄</button>'
+                        + '    ' + approveBtn
                         + '    <button type="button" class="btn btn-secondary btn-sm" data-class-id="'
                         + esc(id) + '" data-class-keep-field="' + esc(field)
                         + '" title="不寫入題庫，只從提案移除此欄">保留原值</button>'
@@ -1114,22 +1167,68 @@
 
 
     function formatClassList(values) {
-        if (!Array.isArray(values) || !values.length) return '（空）';
-        return values.map(function (item) { return String(item == null ? '' : item).trim(); })
-            .filter(Boolean).join(' ｜ ');
+        if (Array.isArray(values)) {
+            if (!values.length) return '（空）';
+            // questionParts objects
+            if (values[0] && typeof values[0] === 'object' && !Array.isArray(values[0])) {
+                return formatPartsPreview(values);
+            }
+            return values.map(function (item) { return String(item == null ? '' : item).trim(); })
+                .filter(Boolean).join(' ｜ ');
+        }
+        if (values == null || values === '') return '（空）';
+        return String(values);
     }
 
-    function classListToEditText(values) {
-        if (!Array.isArray(values) || !values.length) return '';
-        return values.map(function (item) { return String(item == null ? '' : item).trim(); })
+    function classValueToEditText(field, value) {
+        var kind = classFieldKind(field);
+        if (kind === 'parts') {
+            return formatPartsPreview(Array.isArray(value) ? value : []);
+        }
+        if (kind === 'scalar') {
+            return value == null ? '' : String(value);
+        }
+        if (!Array.isArray(value) || !value.length) return '';
+        return value.map(function (item) { return String(item == null ? '' : item).trim(); })
             .filter(Boolean).join(', ');
     }
 
-    function editTextToClassList(text) {
-        return String(text == null ? '' : text)
-            .split(/[,，|｜]/)
-            .map(function (item) { return item.trim(); })
-            .filter(Boolean);
+    function parseClassEditText(field, text) {
+        var kind = classFieldKind(field);
+        var raw = String(text == null ? '' : text).trim();
+        if (kind === 'scalar') return raw;
+        if (kind === 'parts') {
+            if (!raw || raw === '（無分題）' || raw === '（空）') return [];
+            // Compact: a,2,良好 | b,3,優良  OR JSON array
+            if (raw.charAt(0) === '[') {
+                try {
+                    var parsed = JSON.parse(raw);
+                    return Array.isArray(parsed) ? parsed : [];
+                } catch (ignore) {
+                    return [];
+                }
+            }
+            return raw.split(/\s*\|\s*/).map(function (chunk) {
+                var bits = chunk.split(',').map(function (b) { return b.trim(); });
+                var marks = bits[1] !== undefined && bits[1] !== '' && bits[1] !== '—'
+                    ? Number(bits[1]) : null;
+                if (marks !== null && !isFinite(marks)) marks = null;
+                return {
+                    label: bits[0] || '',
+                    marks: marks,
+                    performance: bits[2] || ''
+                };
+            }).filter(function (p) { return p.label || p.marks !== null || p.performance; });
+        }
+        if (!raw) return [];
+        return raw.split(/[,，|｜]/).map(function (item) { return item.trim(); }).filter(Boolean);
+    }
+
+    function classValueIsEmpty(field, value) {
+        var kind = classFieldKind(field);
+        if (kind === 'scalar') return !String(value == null ? '' : value).trim();
+        if (kind === 'parts') return !Array.isArray(value) || !value.length;
+        return !Array.isArray(value) || !value.length;
     }
 
     function readClassEditsFromDom(proposalId) {
@@ -1140,8 +1239,8 @@
         if (!article) return values;
         article.querySelectorAll('[data-class-edit-field]').forEach(function (input) {
             var field = input.getAttribute('data-class-edit-field');
-            if (field !== 'concepts' && field !== 'stemPatterns') return;
-            values[field] = editTextToClassList(input.value);
+            if (!isAllowedClassField(field)) return;
+            values[field] = parseClassEditText(field, input.value);
         });
         return values;
     }
@@ -1191,7 +1290,25 @@
             var values = questionSnap.values || {};
             var fields = Array.isArray(questionSnap.fields) ? questionSnap.fields : Object.keys(values);
             fields.forEach(function (field) {
-                if (field !== 'concepts' && field !== 'stemPatterns') return;
+                if (!isAllowedClassField(field)) return;
+                var kind = classFieldKind(field);
+                if (kind === 'parts') {
+                    if (typeof global.applyPartsFields === 'function') {
+                        global.applyPartsFields(
+                            live,
+                            Array.isArray(values[field]) ? values[field] : [],
+                            Array.isArray(values[field]) && values[field].length ? 'filled' : 'none'
+                        );
+                    } else {
+                        live.questionParts = Array.isArray(values[field]) ? values[field].slice() : [];
+                        live.partsStatus = live.questionParts.length ? 'filled' : 'none';
+                    }
+                    return;
+                }
+                if (kind === 'scalar') {
+                    live[field] = values[field] == null ? '' : String(values[field]);
+                    return;
+                }
                 live[field] = Array.isArray(values[field]) ? values[field].slice() : [];
             });
             await global.storage.updateQuestion(live);
@@ -1205,8 +1322,7 @@
         var values = snap.values || {};
         var fields = Array.isArray(snap.fields) ? snap.fields : Object.keys(values);
         return fields.map(function (field) {
-            var label = field === 'stemPatterns' ? '題幹模式' : (field === 'concepts' ? '概念' : field);
-            return label + '：' + formatClassList(values[field]);
+            return classFieldLabel(field) + '：' + formatClassList(values[field]);
         }).join('\n');
     }
 
@@ -1218,32 +1334,56 @@
         var edits = readClassEditsFromDom(row.id);
         var approveFields = Array.isArray(options.approveFields) && options.approveFields.length
             ? options.approveFields.filter(function (f) {
-                return f === 'concepts' || f === 'stemPatterns';
+                return isAllowedClassField(f);
             })
             : (Array.isArray(row.fields) ? row.fields.slice() : []);
+        // Client-side blank-only gate (server also enforces against live bank).
+        var skippedBlank = [];
+        approveFields = approveFields.filter(function (field) {
+            var meta = classFieldMeta(field);
+            if (!meta || !meta.blankOnly) return true;
+            var cur = row.currentValues && row.currentValues[field];
+            if (!classValueIsEmpty(field, cur)) {
+                skippedBlank.push(classFieldLabel(field));
+                return false;
+            }
+            return true;
+        });
         if (!approveFields.length) {
-            setHubBanner('沒有可通過的欄位。', 'warn');
+            setHubBanner(
+                skippedBlank.length
+                    ? ('空白才可寫入的欄位在題庫已有值，已略過：' + skippedBlank.join('、'))
+                    : '沒有可通過的欄位。',
+                'warn'
+            );
             return;
+        }
+        if (skippedBlank.length) {
+            setHubBanner('已略過非空白欄位：' + skippedBlank.join('、'), 'warn');
         }
         var values = {};
         approveFields.forEach(function (field) {
             if (Object.prototype.hasOwnProperty.call(edits, field)) {
                 values[field] = edits[field];
             } else if (row.proposedValues && Object.prototype.hasOwnProperty.call(row.proposedValues, field)) {
-                values[field] = Array.isArray(row.proposedValues[field])
-                    ? row.proposedValues[field].slice()
-                    : [];
+                var pv = row.proposedValues[field];
+                var kind = classFieldKind(field);
+                if (kind === 'scalar') {
+                    values[field] = pv == null ? '' : String(pv);
+                } else if (kind === 'parts') {
+                    values[field] = Array.isArray(pv) ? pv.slice() : [];
+                } else {
+                    values[field] = Array.isArray(pv) ? pv.slice() : [];
+                }
             } else {
-                values[field] = [];
+                values[field] = classFieldKind(field) === 'scalar' ? '' : [];
             }
         });
         var clearFields = approveFields.filter(function (field) {
-            return !values[field] || !values[field].length;
+            return classValueIsEmpty(field, values[field]);
         });
         if (clearFields.length) {
-            var clearLabels = clearFields.map(function (field) {
-                return field === 'stemPatterns' ? '題幹模式' : '概念';
-            }).join('、');
+            var clearLabels = clearFields.map(classFieldLabel).join('、');
             var clearOk = global.confirm
                 ? global.confirm(
                     '題目「' + String(row.questionId || '') + '」的「' + clearLabels
@@ -1291,6 +1431,17 @@
                 payload.confirmOverwrite = true;
                 data = await proxyAction(payload, 120000);
             }
+            if (data && data.error === 'blank_only_filled') {
+                applyClassProposalRemaining(row.id, data.proposalRemaining);
+                setHubBanner(
+                    (data.message && String(data.message))
+                        || '空白才可寫入的欄位在題庫已有值，已略過。',
+                    'warn'
+                );
+                syncHubChrome();
+                renderHubList();
+                return;
+            }
             if (!data || data.ok !== true) {
                 setHubBanner(
                     (data && data.message && String(data.message)) || errorMessage(data && data.error),
@@ -1303,7 +1454,10 @@
             var fieldNote = (data.approvedFields && data.approvedFields.length)
                 ? '（' + data.approvedFields.join('、') + '）'
                 : '';
-            setHubBanner('已通過並寫入題庫：' + String(row.questionId || '') + fieldNote, 'ok');
+            var blockedNote = (data.blockedFields && data.blockedFields.length)
+                ? '；略過空白才寫：' + data.blockedFields.map(classFieldLabel).join('、')
+                : '';
+            setHubBanner('已通過並寫入題庫：' + String(row.questionId || '') + fieldNote + blockedNote, 'ok');
             syncHubChrome();
             renderHubList();
         } catch (err) {
@@ -1321,14 +1475,12 @@
         options = options || {};
         var rejectFields = Array.isArray(options.rejectFields) && options.rejectFields.length
             ? options.rejectFields.filter(function (f) {
-                return f === 'concepts' || f === 'stemPatterns';
+                return isAllowedClassField(f);
             })
             : [];
         var partial = rejectFields.length > 0;
         var label = partial
-            ? rejectFields.map(function (field) {
-                return field === 'stemPatterns' ? '題幹模式' : '概念';
-            }).join('、')
+            ? rejectFields.map(classFieldLabel).join('、')
             : '全部欄位';
         var ok = global.confirm
             ? global.confirm(
