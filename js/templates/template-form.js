@@ -170,6 +170,21 @@ function renderFormTemplate() {
                     <label for="option-design">選項設計</label>
                     <input type="text" id="option-design">
                 </div>
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label for="inline-diagrams">內嵌圖 (inlineDiagrams)</label>
+                    <p style="margin:0 0 8px;color:var(--text-light);font-size:12px;line-height:1.45;">
+                        路徑寫入共用資料庫 <code>shared/diagrams/</code>（欄位值形如 <code>diagrams/檔名.jpg</code>，多個以逗號分隔）。可預覽、上載新檔，或以 AI 讀圖產生描述（經確認後寫入備註，不會改題幹）。
+                        <span id="inline-diagrams-rights-hint"></span>
+                    </p>
+                    <div id="inline-diagrams-preview" class="inline-diagrams-preview" aria-live="polite"></div>
+                    <div class="inline-diagrams-controls" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0;">
+                        <input type="file" id="inline-diagrams-file" accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml,.jpg,.jpeg,.png,.gif,.webp,.svg">
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="inline-diagrams-upload" hidden>上載並加入</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="inline-diagrams-describe-local" hidden>AI 描述本機檔</button>
+                    </div>
+                    <input type="text" id="inline-diagrams" placeholder="diagrams/example.jpg, diagrams/other.png" autocomplete="off">
+                    <p id="inline-diagrams-status" class="inline-diagrams-status" style="margin:6px 0 0;font-size:12px;color:var(--text-light);" aria-live="polite"></p>
+                </div>
                 <div class="form-group">
                     <label for="remarks">備註</label>
                     <textarea id="remarks"></textarea>

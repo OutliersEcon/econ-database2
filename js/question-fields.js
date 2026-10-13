@@ -552,6 +552,41 @@
         return text;
     }
 
+
+    function isAssetPathPresent(value) {
+        var text = String(value == null ? '' : value).trim();
+        return !!(text && text !== '-');
+    }
+
+    function questionHasInlineDiagrams(question) {
+        return isAssetPathPresent(question && question.inlineDiagrams);
+    }
+
+    function questionHasOriginalQuestion(question) {
+        return isAssetPathPresent(question && question.originalQuestionImage)
+            || isAssetPathPresent(question && question.originalQuestionImageEng);
+    }
+
+    function questionHasOriginalAnswer(question) {
+        return isAssetPathPresent(question && question.originalAnswerImage)
+            || isAssetPathPresent(question && question.originalAnswerImageEng);
+    }
+
+    /** graphType suggests a figure, but inlineDiagrams is empty. */
+    function questionNeedsInlineDiagram(question) {
+        var gt = String((question && question.graphType) || '').trim();
+        if (!gt || gt === '-' || gt === '沒有圖') return false;
+        return !questionHasInlineDiagrams(question);
+    }
+
+    function questionMissingOriginalQuestion(question) {
+        return !questionHasOriginalQuestion(question);
+    }
+
+    function questionMissingOriginalAnswer(question) {
+        return !questionHasOriginalAnswer(question);
+    }
+
     // Shared 特徵 matcher for 題目 filters, 統計, and ConditionMatch.
     // Lives here (before condition-match.js) so advanced filter / data-checks
     // do not need a duplicate fallback body.
@@ -584,6 +619,9 @@
         if (value === '題目空白') return isQuestionTextBlank(q);
         if (value === '答案空白') return isAnswerBlank(q);
         if (value === '評卷報告空白') return isMarkersReportBlank(q);
+        if (value === '缺內嵌圖') return questionNeedsInlineDiagram(q);
+        if (value === '缺原題圖片') return questionMissingOriginalQuestion(q);
+        if (value === '缺答案原圖') return questionMissingOriginalAnswer(q);
         return false;
     }
 
@@ -655,6 +693,12 @@
     global.parseQuestionPartsCompact = parseQuestionPartsCompact;
     global.normalizeYear = normalizeYear;
     global.questionSearchText = questionSearchText;
+    global.questionHasInlineDiagrams = questionHasInlineDiagrams;
+    global.questionHasOriginalQuestion = questionHasOriginalQuestion;
+    global.questionHasOriginalAnswer = questionHasOriginalAnswer;
+    global.questionNeedsInlineDiagram = questionNeedsInlineDiagram;
+    global.questionMissingOriginalQuestion = questionMissingOriginalQuestion;
+    global.questionMissingOriginalAnswer = questionMissingOriginalAnswer;
     global.questionFeatureOn = questionFeatureOn;
     global.ADMIN_BLANK_FEATURE_ITEMS = ADMIN_BLANK_FEATURES;
     global.PART_MARKS_SUM_TOLERANCE = PART_MARKS_SUM_TOLERANCE;

@@ -153,6 +153,9 @@
  *   issueSharedReadToken → handleIssueSharedReadToken_
  *     GitHub App install token preferred (mintGithubInstallationToken_);
  *     else GITHUB_READ_TOKEN (issueGithubDirectReadCredential_)
+ * Shared asset write + vision describe (server GITHUB_TOKEN / AI proxy):
+ *   uploadSharedAsset → handleUploadSharedAsset_  (githubSync; diagrams/|originals/ only)
+ *   describeImage     → handleDescribeImage_      (ai; multimodal Poe/OpenRouter)
  * Admin Git sync (shared bank write/read via server GITHUB_TOKEN):
  *   syncDataUpload   → handleGitUpload_  (rejects schema_version_stale)
  *   syncDataDownload → handleGitDownload_ (returns schemaVersion)
@@ -268,6 +271,8 @@ function handlePost_(e) {
   if (action === 'fetchSharedAsset') return handleFetchShared_(body);
   if (action === 'listSharedData') return handleListShared_(body);
   if (action === 'issueSharedReadToken') return handleIssueSharedReadToken_(body);
+  if (action === 'uploadSharedAsset') return handleUploadSharedAsset_(body);
+  if (action === 'describeImage') return handleDescribeImage_(body);
   if (action === 'listAiBackups') return handleListAiBackups_(body);
   if (action === 'getAiBackup') return handleGetAiBackup_(body);
   if (action === 'listAiUsageRecords') return handleListAiUsageRecords_(body);
@@ -4903,6 +4908,294 @@ function selfTestPromptShape() {
   if (testReplyOk_('未能連線')) throw new Error('test_reply_wrong');
   selfTestAiBackupPaging_();
   console.log('selfTestPromptShape ok');
+}
+
+
+// === Shared asset upload (diagrams / originals) + AI image describe ===
+
+var SHARED_UPLOAD_MAX_BYTES_ = 800000; // under GitHub Contents ~1MB and AS practical POST size
+var DESCRIBE_IMAGE_MAX_BYTES_ = 900000;
+var DESCRIBE_IMAGE_SYSTEM_PROMPT_ =
+  '你是香港經濟科試題資料庫助手。根據附上的圖（通常是題目內嵌圖或原題截圖），'
+  + '用繁體中文寫一段簡短描述（約 40–120 字），適合放進備註、alt 文字或分類提示。'
+  + '說明圖的類型（例如供需圖、生產可能線、表格截圖）與可見的關鍵標示／軸／曲線，'
+  + '不要臆造題幹沒有顯示的數字或結論。只輸出描述正文，不要標題或 markdown。';
+
+function sharedUploadRelOk_(rel) {
+  var path = String(rel || '');
+  if (!githubSharedRelOk_(path)) return false;
+  if (path.indexOf('diagrams/') === 0) return true;
+  if (path.indexOf('originals/') === 0) return true;
+  return false;
+}
+
+function cleanBase64Payload_(raw) {
+  var text = String(raw || '').trim();
+  // Allow data URLs from the browser file reader.
+  var dataUrl = /^data:([a-z0-9.+\/-]+);base64,(.+)$/i.exec(text);
+  if (dataUrl) text = dataUrl[2];
+  text = text.replace(/\s+/g, '');
+  if (!text || !/^[A-Za-z0-9+/=]+$/.test(text)) return '';
+  return text;
+}
+
+function base64ByteLength_(b64) {
+  var cleaned = String(b64 || '').replace(/=+$/, '');
+  return Math.floor(cleaned.length * 0.75);
+}
+
+function sanitizeSharedUploadFileName_(name) {
+  var file = String(name || '').trim().replace(/\\/g, '/').split('/').pop() || '';
+  file = file.replace(/[^\w.\-() ]+/g, '_').replace(/\s+/g, '-');
+  if (file.length > 120) {
+    var dot = file.lastIndexOf('.');
+    var ext = dot > 0 ? file.slice(dot) : '';
+    file = file.slice(0, Math.max(1, 120 - ext.length)) + ext;
+  }
+  return file;
+}
+
+function guessImageMime_(pathOrName, fallback) {
+  var file = String(pathOrName || '').toLowerCase();
+  if (/\.jpe?g$/.test(file)) return 'image/jpeg';
+  if (/\.png$/.test(file)) return 'image/png';
+  if (/\.gif$/.test(file)) return 'image/gif';
+  if (/\.webp$/.test(file)) return 'image/webp';
+  if (/\.svg$/.test(file)) return 'image/svg+xml';
+  var fb = String(fallback || '').trim().toLowerCase();
+  if (/^image\/(jpeg|jpg|png|gif|webp|svg\+xml)$/.test(fb)) {
+    return fb === 'image/jpg' ? 'image/jpeg' : fb;
+  }
+  return 'application/octet-stream';
+}
+
+// Write raw file bytes (already base64) via Contents API. Does not UTF-8-re-encode.
+function githubWriteBase64Content_(cfg, path, base64Content, message) {
+  if (!githubPathOk_(path)) throw gitFail_('github_error');
+  var b64 = cleanBase64Payload_(base64Content);
+  if (!b64) throw gitFail_('bad_request');
+  var bytes = base64ByteLength_(b64);
+  if (bytes <= 0) throw gitFail_('bad_request');
+  if (bytes > GITHUB_CONTENTS_MAX_BYTES_) throw gitFail_('payload_too_large');
+  var api = githubContentsApi_(cfg, path);
+  var existing = githubFetch_(cfg, 'get', api + '?ref=' + encodeURIComponent(cfg.branch), null);
+  if (isGithubTooLarge_(existing)) throw gitFail_('payload_too_large');
+  var sha = '';
+  if (existing.status === 200) {
+    if (!existing.body || existing.body.type === 'dir' || Array.isArray(existing.body)) throw gitFail_('github_error');
+    sha = existing.body.sha ? String(existing.body.sha) : '';
+  } else if (existing.status !== 404) {
+    throw gitFail_('github_error');
+  }
+  var payload = {
+    message: clip_(message, 200) || 'Upload shared asset',
+    content: b64,
+    branch: cfg.branch
+  };
+  if (sha) payload.sha = sha;
+  var put = githubFetch_(cfg, 'put', api, payload);
+  if (isGithubConflict_(put)) throw gitFail_('github_conflict');
+  if (put.status < 200 || put.status >= 300) throw gitFail_('github_error');
+  var newSha = put.body && put.body.content && put.body.content.sha
+    ? put.body.content.sha
+    : (put.body && put.body.commit && put.body.commit.sha);
+  return { sha: sanitizeSha_(newSha), path: path, bytes: bytes };
+}
+
+// githubSync: upload one file under shared/diagrams/ or shared/originals/.
+// Body: { username, path?: 'diagrams/…', fileName?, folder?: 'diagrams'|'originals', contentBase64, message? }
+function handleUploadSharedAsset_(body) {
+  var username = normalizeUsername_(body.username);
+  if (!username || !lookupRights_(username).githubSync) return gitClientError_('feature_unavailable');
+  var cfg = githubConfig_();
+  if (!githubDataReady_(cfg) || !githubSharedReady_(cfg)) return gitClientError_('github_not_configured');
+
+  var b64 = cleanBase64Payload_(body && (body.contentBase64 || body.content || body.base64));
+  if (!b64) return gitClientError_('bad_request');
+  var bytes = base64ByteLength_(b64);
+  if (bytes <= 0 || bytes > SHARED_UPLOAD_MAX_BYTES_) return gitClientError_('payload_too_large');
+
+  var rel = String(body.path || '').trim();
+  if (!rel) {
+    var folder = String(body.folder || 'diagrams').trim().replace(/^\/+|\/+$/g, '');
+    if (folder !== 'diagrams' && folder !== 'originals') folder = 'diagrams';
+    var fileName = sanitizeSharedUploadFileName_(body.fileName || body.name || '');
+    if (!fileName) {
+      var tz = Session.getScriptTimeZone() || 'Asia/Hong_Kong';
+      var stamp = Utilities.formatDate(new Date(), tz, 'yyyyMMdd-HHmmss');
+      fileName = 'upload-' + stamp + '.jpg';
+    }
+    rel = folder + '/' + fileName;
+  }
+  if (!sharedUploadRelOk_(rel)) return gitClientError_('bad_request');
+  var fullPath = githubSharedFilePath_(cfg, rel);
+  if (!fullPath) return gitClientError_('github_error');
+
+  if (!takeGitSlot_(username, 8)) return gitClientError_('rate_limited');
+  var lock = LockService.getScriptLock();
+  var held = false;
+  try {
+    if (!lock.tryLock(20000)) {
+      releaseGitSlot_(username);
+      return gitClientError_('rate_limited');
+    }
+    held = true;
+    var written;
+    try {
+      written = githubWriteBase64Content_(
+        cfg,
+        fullPath,
+        b64,
+        String(body.message || '').trim() || ('Upload shared asset ' + rel + ' by ' + username)
+      );
+    } catch (writeErr) {
+      if (writeErr && writeErr.code === 'github_conflict') {
+        // One retry after conflict (sha race).
+        written = githubWriteBase64Content_(
+          cfg,
+          fullPath,
+          b64,
+          String(body.message || '').trim() || ('Upload shared asset ' + rel + ' by ' + username)
+        );
+      } else {
+        throw writeErr;
+      }
+    }
+    lock.releaseLock();
+    held = false;
+    writeLog_({
+      username: username,
+      action: 'uploadSharedAsset',
+      success: true,
+      metadata: { path: rel, bytes: bytes, sha: written.sha || '' }
+    }, true);
+    return gitOk_({
+      path: rel,
+      fullPath: fullPath,
+      sha: written.sha,
+      bytes: bytes,
+      mediaType: guessImageMime_(rel, body.mediaType || body.mimeType)
+    });
+  } catch (err) {
+    if (held) {
+      try { lock.releaseLock(); } catch (ignore) {}
+    }
+    safeLog_(err);
+    releaseGitSlot_(username);
+    var code = err && err.code ? err.code : 'github_error';
+    if (code !== 'payload_too_large' && code !== 'bad_request' && code !== 'rate_limited') {
+      code = 'github_error';
+    }
+    writeLog_({
+      username: username,
+      action: 'uploadSharedAsset',
+      success: false,
+      metadata: { error: code, path: rel, detail: clip_(err && err.message, 120) }
+    }, true);
+    return gitClientError_(code);
+  }
+}
+
+// ai: multimodal describe for alt / remarks / classification hints.
+// Body: { username, imageBase64|contentBase64, mimeType?, hint?, model?, provider?, poeApiKey?, openRouterApiKey? }
+function handleDescribeImage_(body) {
+  var username = normalizeUsername_(body.username);
+  if (!username || !lookupRights_(username).ai) {
+    return { ok: false, error: 'feature_unavailable' };
+  }
+  var provider = resolveProvider_(body);
+  var apiKey = resolveApiKey_(body, username, provider);
+  if (!apiKey) return { ok: false, error: 'missing_api_key' };
+
+  var b64 = cleanBase64Payload_(body && (body.imageBase64 || body.contentBase64 || body.base64 || body.content));
+  if (!b64) return { ok: false, error: 'bad_request' };
+  var bytes = base64ByteLength_(b64);
+  if (bytes <= 0 || bytes > DESCRIBE_IMAGE_MAX_BYTES_) return { ok: false, error: 'payload_too_large' };
+
+  var mime = guessImageMime_(body.fileName || body.path || '', body.mimeType || body.mediaType || 'image/jpeg');
+  if (mime.indexOf('image/') !== 0) mime = 'image/jpeg';
+  var hint = clipChars_(String(body.hint || body.prompt || '').trim(), 500);
+
+  var dailyLimit = nonNegativeInt_(props_().getProperty('POE_DAILY_LIMIT'), 40);
+  if (dailyLimit > 0 && countTodayGenerations_(username) >= dailyLimit) {
+    return { ok: false, error: 'rate_limited' };
+  }
+  var intervalSeconds = nonNegativeInt_(props_().getProperty('POE_MIN_INTERVAL_SECONDS'), 20);
+  if (!takeIntervalSlot_(username, intervalSeconds)) {
+    return { ok: false, error: 'rate_limited' };
+  }
+
+  var model = resolveModel_(body.model, provider);
+  var userText = '請描述這張圖，供經濟科題庫備註／alt／分類參考。';
+  if (hint) userText += '\n補充說明：' + hint;
+  var dataUrl = 'data:' + mime + ';base64,' + b64;
+  var messages = [
+    { role: 'system', content: DESCRIBE_IMAGE_SYSTEM_PROMPT_ },
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: userText },
+        { type: 'image_url', image_url: { url: dataUrl } }
+      ]
+    }
+  ];
+
+  var started = Date.now();
+  try {
+    var completion = requestCompletionMessages_(apiKey, model, messages, provider);
+    var durationMs = Date.now() - started;
+    var description = String(completion.content || '').trim();
+    if (!description) {
+      releaseIntervalSlot_(username);
+      return { ok: false, error: 'empty_response' };
+    }
+    // Cap client-facing description.
+    description = clipChars_(description, 800);
+    writeLog_({
+      username: username,
+      action: 'describeImage',
+      success: true,
+      metadata: {
+        model: completion.model || model,
+        provider: provider,
+        durationMs: durationMs,
+        bytes: bytes,
+        promptTokens: completion.promptTokens,
+        completionTokens: completion.completionTokens
+      }
+    }, true);
+    // Count toward daily usage like other AI actions when sheet helper exists.
+    try {
+      if (typeof recordGenerationRow_ === 'function') {
+        recordGenerationRow_({
+          username: username,
+          action: 'describeImage',
+          model: completion.model || model,
+          provider: provider,
+          durationMs: durationMs,
+          success: true
+        });
+      }
+    } catch (ignoreRow) {}
+    return {
+      ok: true,
+      description: description,
+      model: completion.model || model,
+      provider: provider,
+      durationMs: durationMs
+    };
+  } catch (err) {
+    releaseIntervalSlot_(username);
+    safeLog_(err);
+    var code = err && err.code ? err.code : 'upstream_error';
+    writeLog_({
+      username: username,
+      action: 'describeImage',
+      success: false,
+      metadata: { error: code, model: model, provider: provider, detail: clip_(err && err.message, 120) }
+    }, true);
+    return { ok: false, error: code === 'upstream_timeout' ? 'upstream_timeout' : 'upstream_error' };
+  }
 }
 
 // === Admin shared-bank Git sync (server GITHUB_TOKEN) ===
