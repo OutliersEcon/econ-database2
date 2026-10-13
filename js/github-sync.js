@@ -248,6 +248,31 @@ async function runGitJob(kind, job) {
     }
 }
 
+function formatGitHubUploadLogTime(date) {
+    var d = date instanceof Date ? date : new Date(date);
+    if (isNaN(d.getTime())) return String(date == null ? '' : date);
+    try {
+        var parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Hong_Kong',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        }).formatToParts(d);
+        var map = {};
+        for (var i = 0; i < parts.length; i++) {
+            if (parts[i].type !== 'literal') map[parts[i].type] = parts[i].value;
+        }
+        return map.year + '-' + map.month + '-' + map.day + ' '
+            + map.hour + ':' + map.minute + ':' + map.second + ' HKT';
+    } catch (err) {
+        return d.toISOString();
+    }
+}
+
 async function uploadQuestionsToGit(options) {
     options = options || {};
     if (!gitSyncState.allowed) {
@@ -261,7 +286,7 @@ async function uploadQuestionsToGit(options) {
     }
     var mode = options.auto ? 'auto' : 'manual';
     await runGitJob(mode, async function () {
-        console.log('[GitHub upload] ' + new Date().toISOString() + ' starting (' + mode + ')');
+        console.log('[GitHub upload] ' + formatGitHubUploadLogTime(new Date()) + ' starting (' + mode + ')');
         setGitStatus(options.auto ? '正在自動同步到 GitHub…' : '正在上傳到 GitHub…', '');
         try {
             setGitStatus('正在檢查共用題庫版本…', '');
@@ -305,14 +330,14 @@ async function uploadQuestionsToGit(options) {
             var writtenSchema = (typeof data.schemaVersion === 'number')
                 ? data.schemaVersion
                 : (typeof readSchemaVersion === 'function' ? readSchemaVersion(exportData) : 0);
-            console.log('[GitHub upload] ' + new Date().toISOString() + ' succeeded (' + count + ' questions)');
+            console.log('[GitHub upload] ' + formatGitHubUploadLogTime(new Date()) + ' succeeded (' + count + ' questions)');
             var message = '已上傳 ' + count + ' 題到 GitHub';
             if (writtenSchema > 0) message += '（格式版本 ' + writtenSchema + '）';
             setGitStatus(message, 'ok');
             if (typeof showNotification === 'function') showNotification(message, 'success');
         } catch (error) {
             var message = gitFailureText(error);
-            console.warn('[GitHub upload] ' + new Date().toISOString() + ' failed: ' + message);
+            console.warn('[GitHub upload] ' + formatGitHubUploadLogTime(new Date()) + ' failed: ' + message);
             setGitStatus(message, 'error');
             if (typeof showNotification === 'function') showNotification(message, 'error');
         }
