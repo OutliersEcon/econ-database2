@@ -60,7 +60,10 @@
  *
  * Shared diagrams, the question bank, and paper packs live under the same prefix.
  * GITHUB_SHARED_PREFIX defaults to shared. The site asks for a relative path
- * such as data/database.json, diagrams/…, originals/…, or papers/….
+ * such as data/database.json, data/database-hkeaa.json, data/database-aristo.json,
+ * diagrams/…, originals/…, or papers/….
+ * Publisher shards (hkeaa / aristo) are readable the same way as database.json
+ * for known users; database-aristo.json is mockTests-only (sharedMockOnly_).
  * The script reads <prefix>/<relative path> and will not read users/.
  * A static host such as GitHub Pages cannot read a private repository:
  * raw file URLs for a private repo answer 404 unless a token is sent, and
@@ -4449,6 +4452,8 @@ function stripMockQuestions_(text) {
 function sharedMockOnly_(rel) {
   var path = String(rel || '');
   if (path === 'data/database.js') return true;
+  // Publisher shard: 雅集 only for mockTests (HKEAA shard stays readable).
+  if (path === 'data/database-aristo.json') return true;
   if (path === 'build' || path.indexOf('build/') === 0) return true;
   if (path === 'diagrams' || path.indexOf('diagrams/') === 0) return true;
   if (path === 'papers/mock-tests' || path.indexOf('papers/mock-tests/') === 0) return true;
@@ -4834,6 +4839,8 @@ function selfTestRoleRights() {
   if (!sharedMockOnly_('papers/mock-tests/file.pdf')) throw new Error('mock_path_paper');
   if (sharedMockOnly_('originals/dse/2012/q-p1-01.jpg')) throw new Error('mock_path_dse');
   if (sharedMockOnly_('data/database.json')) throw new Error('mock_path_bank');
+  if (sharedMockOnly_('data/database-hkeaa.json')) throw new Error('mock_path_hkeaa');
+  if (!sharedMockOnly_('data/database-aristo.json')) throw new Error('mock_path_aristo');
   if (sharedMockOnly_('papers/past-papers/file.pdf')) throw new Error('mock_path_past');
 }
 
@@ -7661,6 +7668,8 @@ function selfTestGitPaths() {
   if (githubSharedPrefix_({ sharedPrefix: 'users/example' })) throw new Error('shared_prefix_users_child');
   if (githubSharedPrefix_({ sharedPrefix: 'shared' }) !== 'shared') throw new Error('shared_prefix_explicit');
   if (!githubSharedRelOk_('data/database.json')) throw new Error('shared_json');
+  if (!githubSharedRelOk_('data/database-hkeaa.json')) throw new Error('shared_json_hkeaa');
+  if (!githubSharedRelOk_('data/database-aristo.json')) throw new Error('shared_json_aristo');
   if (!githubSharedRelOk_('diagrams/MT27-P1-24.jpg')) throw new Error('shared_diagram');
   if (!githubSharedRelOk_('originals/dse/2019/q-p1-41.jpg')) throw new Error('shared_original');
   if (!githubSharedRelOk_('papers/mock-tests/Mock Test 27 Paper 1.pdf')) throw new Error('shared_mock_name');
