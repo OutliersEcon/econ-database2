@@ -40,6 +40,9 @@
  * 分題提案 staging (propose never writes bank; approve patches database.json):
  *   <GITHUB_SHARED_PREFIX>/data/question-parts-proposals.json
  *   e.g. shared/data/question-parts-proposals.json
+ * 分類提案 staging (concepts / stemPatterns; pause at 200 pending):
+ *   <GITHUB_SHARED_PREFIX>/data/classification-proposals.json
+ *   e.g. shared/data/classification-proposals.json
  * Personal preferences (known user; getUserSettings / saveUserSettings):
  *   users/<username>/settings.json
  * Model-reply (AI出題) backups stay personal:
@@ -133,6 +136,13 @@
  *   bulkApproveQuestionPartsProposals → handleBulkApproveQuestionPartsProposals_ (admin; bank patch)
  *   rejectQuestionPartsProposal     → handleRejectQuestionPartsProposal_  (admin)
  *   bulkRejectQuestionPartsProposals  → handleBulkRejectQuestionPartsProposals_  (admin)
+ * 分類提案 staging (shared/data/classification-proposals.json; concepts / stemPatterns):
+ *   listClassificationProposals       → handleListClassificationProposals_       (admin)
+ *   submitClassificationProposal      → handleSubmitClassificationProposal_      (admin|githubSync; pause≥200)
+ *   approveClassificationProposal     → handleApproveClassificationProposal_     (admin; bank patch)
+ *   bulkApproveClassificationProposals → handleBulkApproveClassificationProposals_ (admin; bank patch)
+ *   rejectClassificationProposal      → handleRejectClassificationProposal_      (admin)
+ *   bulkRejectClassificationProposals → handleBulkRejectClassificationProposals_ (admin)
  * Personal user settings (users/<username>/settings.json; known user; not bank SCHEMA):
  *   getUserSettings  → handleGetUserSettings_
  *   saveUserSettings → handleSaveUserSettings_
@@ -242,6 +252,12 @@ function handlePost_(e) {
   if (action === 'bulkApproveQuestionPartsProposals') return handleBulkApproveQuestionPartsProposals_(body);
   if (action === 'rejectQuestionPartsProposal') return handleRejectQuestionPartsProposal_(body);
   if (action === 'bulkRejectQuestionPartsProposals') return handleBulkRejectQuestionPartsProposals_(body);
+  if (action === 'listClassificationProposals') return handleListClassificationProposals_(body);
+  if (action === 'submitClassificationProposal') return handleSubmitClassificationProposal_(body);
+  if (action === 'approveClassificationProposal') return handleApproveClassificationProposal_(body);
+  if (action === 'bulkApproveClassificationProposals') return handleBulkApproveClassificationProposals_(body);
+  if (action === 'rejectClassificationProposal') return handleRejectClassificationProposal_(body);
+  if (action === 'bulkRejectClassificationProposals') return handleBulkRejectClassificationProposals_(body);
   if (action === 'getUserSettings') return handleGetUserSettings_(body);
   if (action === 'saveUserSettings') return handleSaveUserSettings_(body);
   if (action === 'reviewStemPatterns') return handleReviewStemPatterns_(body);
@@ -2667,6 +2683,938 @@ function handleRejectQuestionPartsProposal_(body) {
   writeLog_({
     username: username,
     action: 'rejectQuestionPartsProposal',
+    success: true,
+    metadata: {
+      proposalId: saved.proposal && saved.proposal.id,
+      questionId: saved.proposal && saved.proposal.questionId
+    }
+  }, true);
+  return {
+    ok: true,
+    proposal: saved.proposal,
+    sha: saved.sha,
+    path: saved.path
+  };
+}
+
+// === 分類提案 staging (shared/data/classification-proposals.json) ===
+// Agents propose concepts / stemPatterns here. Only approve patches the shared
+// bank (database.json). Propose never touches the bank. Pending-only file:
+// approve and reject both remove the staging row. Intake pauses at 200 pending.
+
+var CLASSIFICATION_PROPOSALS_REL_PATH_ = 'data/classification-proposals.json';
+var CLASSIFICATION_PROPOSALS_MAX_BYTES_ = 2000000;
+var CLASSIFICATION_PROPOSALS_MAX_ITEMS_ = 5000;
+var CLASSIFICATION_PROPOSALS_SCHEMA_VERSION_ = 1;
+var CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_ = 200;
+var CLASSIFICATION_ALLOWED_FIELDS_ = { concepts: true, stemPatterns: true };
+var CLASSIFICATION_CONFIDENCE_ = { '高': true, '中': true, '低': true };
+
+function githubSharedClassificationProposalsPath_(cfg) {
+  var prefix = githubSharedPrefix_(cfg);
+  if (!prefix) return '';
+  return joinGithubPath_(prefix, CLASSIFICATION_PROPOSALS_REL_PATH_);
+}
+
+function emptyClassificationProposalsStore_() {
+  return {
+    schemaVersion: CLASSIFICATION_PROPOSALS_SCHEMA_VERSION_,
+    updatedAt: '',
+    proposals: []
+  };
+}
+
+function readClassificationProposalsStore_(cfg) {
+  var path = githubSharedClassificationProposalsPath_(cfg);
+  if (!path) throw gitFail_('github_error');
+  try {
+    var read = githubReadText_(cfg, path);
+    var parsed;
+    try {
+      parsed = JSON.parse(read.text);
+    } catch (ignore) {
+      throw gitFail_('github_error');
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw gitFail_('github_error');
+    }
+    if (!Array.isArray(parsed.proposals)) parsed.proposals = [];
+    if (typeof parsed.schemaVersion !== 'number') {
+      parsed.schemaVersion = CLASSIFICATION_PROPOSALS_SCHEMA_VERSION_;
+    }
+    return { store: parsed, sha: read.sha || '', path: path, existed: true };
+  } catch (err) {
+    if (err && err.code === 'github_not_found') {
+      return {
+        store: emptyClassificationProposalsStore_(),
+        sha: '',
+        path: path,
+        existed: false
+      };
+    }
+    throw err;
+  }
+}
+
+function writeClassificationProposalsStore_(cfg, store, message) {
+  var path = githubSharedClassificationProposalsPath_(cfg);
+  if (!path) throw gitFail_('github_error');
+  store.schemaVersion = CLASSIFICATION_PROPOSALS_SCHEMA_VERSION_;
+  store.updatedAt = new Date().toISOString();
+  if (!Array.isArray(store.proposals)) store.proposals = [];
+  var text = JSON.stringify(store);
+  if (utf8Length_(text) > CLASSIFICATION_PROPOSALS_MAX_BYTES_) {
+    throw gitFail_('payload_too_large');
+  }
+  var written = githubWriteText_(cfg, path, text, message || 'Update classification proposals');
+  return { sha: written.sha, path: path, store: store };
+}
+
+function normalizeClassificationStringList_(raw) {
+  var out = [];
+  var seen = {};
+  var i;
+  if (Array.isArray(raw)) {
+    for (i = 0; i < raw.length; i++) {
+      var s = String(raw[i] == null ? '' : raw[i]).trim();
+      if (!s || seen[s]) continue;
+      seen[s] = true;
+      out.push(s);
+    }
+    return out;
+  }
+  if (raw == null) return out;
+  var text = String(raw).trim();
+  if (!text) return out;
+  var parts = text.split(/[|,\n；;]+/);
+  for (i = 0; i < parts.length; i++) {
+    var item = String(parts[i] || '').trim();
+    if (!item || seen[item]) continue;
+    seen[item] = true;
+    out.push(item);
+  }
+  return out;
+}
+
+function normalizeClassificationFields_(raw) {
+  var out = [];
+  var seen = {};
+  var list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+  for (var i = 0; i < list.length; i++) {
+    var key = String(list[i] == null ? '' : list[i]).trim();
+    if (!CLASSIFICATION_ALLOWED_FIELDS_[key] || seen[key]) continue;
+    seen[key] = true;
+    out.push(key);
+  }
+  return out;
+}
+
+function normalizeClassificationConfidence_(raw) {
+  var s = String(raw == null ? '' : raw).trim();
+  if (CLASSIFICATION_CONFIDENCE_[s]) return s;
+  var lower = s.toLowerCase();
+  if (lower === 'high' || lower === 'h') return '高';
+  if (lower === 'medium' || lower === 'med' || lower === 'm') return '中';
+  if (lower === 'low' || lower === 'l') return '低';
+  return '';
+}
+
+function bankClassificationList_(question, field) {
+  if (!question) return [];
+  return normalizeClassificationStringList_(question[field]);
+}
+
+function bankClassificationFieldFilled_(question, field) {
+  return bankClassificationList_(question, field).length > 0;
+}
+
+function bankQuestionReviewedByAi_(question) {
+  return String(question && question.reviewedByAI || '').trim().toUpperCase() === 'Y';
+}
+
+function classificationListsEqual_(a, b) {
+  var left = normalizeClassificationStringList_(a);
+  var right = normalizeClassificationStringList_(b);
+  if (left.length !== right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+function publicClassificationProposalView_(row) {
+  if (!row || typeof row !== 'object') return null;
+  var fields = normalizeClassificationFields_(row.fields);
+  var currentValues = row.currentValues && typeof row.currentValues === 'object'
+    ? row.currentValues
+    : {};
+  var proposedValues = row.proposedValues && typeof row.proposedValues === 'object'
+    ? row.proposedValues
+    : {};
+  var currentOut = {};
+  var proposedOut = {};
+  var i;
+  for (i = 0; i < fields.length; i++) {
+    var f = fields[i];
+    currentOut[f] = normalizeClassificationStringList_(currentValues[f]);
+    proposedOut[f] = normalizeClassificationStringList_(proposedValues[f]);
+  }
+  return {
+    id: String(row.id || ''),
+    questionId: String(row.questionId || ''),
+    fields: fields,
+    currentValues: currentOut,
+    proposedValues: proposedOut,
+    reason: String(row.reason == null ? '' : row.reason).trim(),
+    confidence: normalizeClassificationConfidence_(row.confidence),
+    createdAt: String(row.createdAt || row.proposedAt || ''),
+    createdBy: String(row.createdBy || row.proposedBy || ''),
+    status: 'pending'
+  };
+}
+
+function findClassificationProposal_(store, proposalId, questionId) {
+  var list = Array.isArray(store.proposals) ? store.proposals : [];
+  var wantId = String(proposalId || '').trim();
+  var wantQ = String(questionId || '').trim();
+  var i;
+  if (wantId) {
+    for (i = 0; i < list.length; i++) {
+      if (String(list[i] && list[i].id || '') === wantId) {
+        return { proposal: list[i], index: i };
+      }
+    }
+  }
+  if (wantQ) {
+    for (i = 0; i < list.length; i++) {
+      if (String(list[i] && list[i].questionId || '') === wantQ) {
+        return { proposal: list[i], index: i };
+      }
+    }
+  }
+  return null;
+}
+
+function removeClassificationProposalAt_(store, index) {
+  var list = Array.isArray(store.proposals) ? store.proposals : [];
+  if (index < 0 || index >= list.length) return null;
+  var removed = list[index];
+  list.splice(index, 1);
+  store.proposals = list;
+  return removed;
+}
+
+function publicBankClassificationSnapshot_(question, fields) {
+  if (!question) return null;
+  var keys = normalizeClassificationFields_(fields);
+  if (!keys.length) keys = ['concepts', 'stemPatterns'];
+  var values = {};
+  for (var i = 0; i < keys.length; i++) {
+    values[keys[i]] = bankClassificationList_(question, keys[i]);
+  }
+  return {
+    questionId: String(question.id || ''),
+    reviewedByAI: String(question.reviewedByAI || ''),
+    fields: keys,
+    values: values
+  };
+}
+
+function classificationNeedsOverwriteConfirm_(question, fields) {
+  if (bankQuestionReviewedByAi_(question)) return true;
+  for (var i = 0; i < fields.length; i++) {
+    if (bankClassificationFieldFilled_(question, fields[i])) return true;
+  }
+  return false;
+}
+
+function mutateClassificationProposalsStore_(username, message, mutator) {
+  var cfg = githubConfig_();
+  if (!githubDataReady_(cfg)) {
+    return { ok: false, error: 'github_not_configured' };
+  }
+  if (!takeGitSlot_(username, 8)) return { ok: false, error: 'rate_limited' };
+  var lock = LockService.getScriptLock();
+  var held = false;
+  try {
+    if (!lock.tryLock(25000)) {
+      releaseGitSlot_(username);
+      return { ok: false, error: 'rate_limited' };
+    }
+    held = true;
+    var loaded = readClassificationProposalsStore_(cfg);
+    var result = mutator(loaded.store, loaded);
+    if (!result || result.ok !== true) {
+      lock.releaseLock();
+      held = false;
+      releaseGitSlot_(username);
+      return result || { ok: false, error: 'github_error' };
+    }
+    var written = writeClassificationProposalsStore_(cfg, loaded.store, message);
+    lock.releaseLock();
+    held = false;
+    releaseGitSlot_(username);
+    result.sha = written.sha;
+    result.path = written.path;
+    return result;
+  } catch (err) {
+    if (held) {
+      try { lock.releaseLock(); } catch (ignore) {}
+      held = false;
+    }
+    safeLog_(err);
+    releaseGitSlot_(username);
+    var code = err && err.code ? err.code : 'github_error';
+    if (code === 'payload_too_large') return { ok: false, error: 'payload_too_large' };
+    if (code === 'github_not_found') return { ok: false, error: 'github_not_found' };
+    return { ok: false, error: 'github_error' };
+  }
+}
+
+function prepareClassificationProposalItem_(item, defaultCreatedBy) {
+  if (!item || typeof item !== 'object') return null;
+  var questionId = String(item.questionId || '').trim();
+  if (!questionId || questionId.length > 80) return null;
+
+  var proposedValuesRaw = item.proposedValues && typeof item.proposedValues === 'object'
+    ? item.proposedValues
+    : {};
+  // Convenience: top-level concepts / stemPatterns map into proposedValues.
+  if (item.concepts != null && proposedValuesRaw.concepts == null) {
+    proposedValuesRaw.concepts = item.concepts;
+  }
+  if (item.stemPatterns != null && proposedValuesRaw.stemPatterns == null) {
+    proposedValuesRaw.stemPatterns = item.stemPatterns;
+  }
+
+  var fields = normalizeClassificationFields_(item.fields);
+  if (!fields.length) {
+    if (proposedValuesRaw.concepts != null) fields.push('concepts');
+    if (proposedValuesRaw.stemPatterns != null) fields.push('stemPatterns');
+  }
+  if (!fields.length) return null;
+
+  var proposedValues = {};
+  var hasAnyProposed = false;
+  var i;
+  for (i = 0; i < fields.length; i++) {
+    var f = fields[i];
+    var list = normalizeClassificationStringList_(proposedValuesRaw[f]);
+    proposedValues[f] = list;
+    if (list.length) hasAnyProposed = true;
+  }
+  // Allow explicit empty array to clear a field (still a proposal).
+  if (!hasAnyProposed) {
+    for (i = 0; i < fields.length; i++) {
+      if (Object.prototype.hasOwnProperty.call(proposedValuesRaw, fields[i])) {
+        hasAnyProposed = true;
+        break;
+      }
+    }
+  }
+  if (!hasAnyProposed) return null;
+
+  var currentValuesRaw = item.currentValues && typeof item.currentValues === 'object'
+    ? item.currentValues
+    : {};
+  var currentValues = {};
+  for (i = 0; i < fields.length; i++) {
+    currentValues[fields[i]] = normalizeClassificationStringList_(currentValuesRaw[fields[i]]);
+  }
+
+  var reason = String(item.reason == null ? '' : item.reason).trim();
+  if (reason.length > 2000) reason = reason.slice(0, 2000);
+  var confidence = normalizeClassificationConfidence_(item.confidence);
+  var createdBy = String(
+    item.createdBy != null ? item.createdBy
+      : (item.proposedBy != null ? item.proposedBy : (defaultCreatedBy || ''))
+  ).trim();
+  if (createdBy.length > 120) createdBy = createdBy.slice(0, 120);
+
+  return {
+    questionId: questionId,
+    fields: fields,
+    currentValues: currentValues,
+    proposedValues: proposedValues,
+    reason: reason,
+    confidence: confidence,
+    createdBy: createdBy
+  };
+}
+
+function handleListClassificationProposals_(body) {
+  var username = normalizeUsername_(body.username);
+  if (!username || !lookupRights_(username).admin) return { ok: false, error: 'feature_unavailable' };
+  var cfg = githubConfig_();
+  if (!githubDataReady_(cfg)) return gitClientError_('github_not_configured');
+  try {
+    var loaded = readClassificationProposalsStore_(cfg);
+    var rows = (loaded.store.proposals || []).map(publicClassificationProposalView_).filter(Boolean);
+    rows.sort(function (a, b) {
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+    var pendingCount = rows.length;
+    var paused = pendingCount >= CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_;
+    if (rows.length > 500) rows = rows.slice(0, 500);
+    return {
+      ok: true,
+      rows: rows,
+      pendingCount: pendingCount,
+      pauseThreshold: CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_,
+      paused: paused,
+      path: loaded.path,
+      sha: loaded.sha,
+      schemaVersion: CLASSIFICATION_PROPOSALS_SCHEMA_VERSION_
+    };
+  } catch (err) {
+    if (err && err.code === 'github_not_found') {
+      return {
+        ok: true,
+        rows: [],
+        pendingCount: 0,
+        pauseThreshold: CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_,
+        paused: false,
+        path: githubSharedClassificationProposalsPath_(cfg),
+        sha: '',
+        schemaVersion: CLASSIFICATION_PROPOSALS_SCHEMA_VERSION_
+      };
+    }
+    safeLog_(err);
+    return gitClientError_(err && err.code ? err.code : 'github_error');
+  }
+}
+
+// Intake: admin|githubSync. Never writes database.json.
+// Upserts one pending proposal per questionId. Rejects when pending >= 200.
+function handleSubmitClassificationProposal_(body) {
+  var username = normalizeUsername_(body.username);
+  var rights = lookupRights_(username);
+  if (!username || !(rights.admin || rights.githubSync)) {
+    return { ok: false, error: 'feature_unavailable' };
+  }
+
+  var incoming = [];
+  if (Array.isArray(body.proposals)) {
+    incoming = body.proposals;
+  } else if (body.questionId || body.proposedValues || body.concepts || body.stemPatterns) {
+    incoming = [body];
+  }
+  if (!incoming.length) return { ok: false, error: 'bad_request' };
+  if (incoming.length > 200) incoming = incoming.slice(0, 200);
+
+  var prepared = [];
+  var i;
+  for (i = 0; i < incoming.length; i++) {
+    var row = prepareClassificationProposalItem_(incoming[i], username);
+    if (row) prepared.push(row);
+  }
+  if (!prepared.length) return { ok: false, error: 'bad_request' };
+
+  var saved = mutateClassificationProposalsStore_(
+    username,
+    'Submit classification proposals (' + prepared.length + ')',
+    function (store) {
+      var list = Array.isArray(store.proposals) ? store.proposals : [];
+      var existingByQid = {};
+      var j;
+      for (j = 0; j < list.length; j++) {
+        var existingQid = String(list[j] && list[j].questionId || '');
+        if (existingQid && existingByQid[existingQid] == null) {
+          existingByQid[existingQid] = list[j];
+        }
+      }
+
+      var replacing = {};
+      for (j = 0; j < prepared.length; j++) replacing[prepared[j].questionId] = true;
+
+      var keptWithoutReplace = [];
+      for (j = 0; j < list.length; j++) {
+        var keepQid = String(list[j] && list[j].questionId || '');
+        if (replacing[keepQid]) continue;
+        keptWithoutReplace.push(list[j]);
+      }
+
+      // Pause when backlog already >= 200 and intake would add a new questionId.
+      // Pure replacements (same questionId) remain allowed so bots can revise.
+      var grows = false;
+      var newCount = 0;
+      for (j = 0; j < prepared.length; j++) {
+        if (!existingByQid[prepared[j].questionId]) {
+          grows = true;
+          newCount += 1;
+        }
+      }
+      var pendingAfter = keptWithoutReplace.length + prepared.length;
+      if (grows && (list.length >= CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_
+          || pendingAfter > CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_)) {
+        return {
+          ok: false,
+          paused: true,
+          pendingCount: list.length,
+          pauseThreshold: CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_,
+          error: 'paused',
+          message: '待審批分類提案已達上限（' + CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_ + '）。請先審批後再提交。'
+        };
+      }
+
+      var upserted = [];
+      var nowIso = new Date().toISOString();
+      var kept = keptWithoutReplace.slice();
+      for (j = prepared.length - 1; j >= 0; j--) {
+        var prep = prepared[j];
+        var prior = existingByQid[prep.questionId];
+        var record = {
+          id: prior && prior.id
+            ? String(prior.id)
+            : ('cp_' + Utilities.getUuid().replace(/-/g, '').slice(0, 16)),
+          questionId: prep.questionId,
+          fields: prep.fields,
+          currentValues: prep.currentValues,
+          proposedValues: prep.proposedValues,
+          reason: prep.reason,
+          confidence: prep.confidence,
+          createdAt: nowIso,
+          createdBy: prep.createdBy || username,
+          status: 'pending'
+        };
+        kept.unshift(record);
+        upserted.unshift(publicClassificationProposalView_(record));
+      }
+      if (kept.length > CLASSIFICATION_PROPOSALS_MAX_ITEMS_) {
+        kept = kept.slice(0, CLASSIFICATION_PROPOSALS_MAX_ITEMS_);
+      }
+      store.proposals = kept;
+      return {
+        ok: true,
+        proposals: upserted,
+        pendingCount: kept.length,
+        pauseThreshold: CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_,
+        paused: kept.length >= CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_
+      };
+    }
+  );
+
+  if (!saved || saved.ok !== true) {
+    if (saved && saved.paused === true) {
+      return {
+        ok: false,
+        paused: true,
+        pendingCount: saved.pendingCount,
+        pauseThreshold: saved.pauseThreshold || CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_,
+        error: 'paused',
+        message: saved.message || ''
+      };
+    }
+    return { ok: false, error: (saved && saved.error) || 'github_error' };
+  }
+  writeLog_({
+    username: username,
+    action: 'submitClassificationProposal',
+    success: true,
+    metadata: { count: prepared.length, pendingCount: saved.pendingCount }
+  }, true);
+  return {
+    ok: true,
+    proposals: Array.isArray(saved.proposals) ? saved.proposals : [],
+    pendingCount: saved.pendingCount,
+    pauseThreshold: CLASSIFICATION_PROPOSALS_PAUSE_THRESHOLD_,
+    paused: saved.paused === true,
+    sha: saved.sha,
+    path: saved.path
+  };
+}
+
+function handleApproveClassificationProposal_(body) {
+  var username = normalizeUsername_(body.username);
+  if (!username || !lookupRights_(username).admin) return { ok: false, error: 'feature_unavailable' };
+  var proposalId = String(body.proposalId || body.id || '').trim();
+  var questionIdHint = String(body.questionId || '').trim();
+  var confirmOverwrite = body.confirmOverwrite === true
+    || body.confirmOverwrite === 'true'
+    || body.confirmOverwrite === 1;
+  if (!proposalId && !questionIdHint) return { ok: false, error: 'bad_request' };
+
+  var cfg = githubConfig_();
+  if (!githubDataReady_(cfg) || !githubSharedBankPath_(cfg)) {
+    return gitClientError_('github_not_configured');
+  }
+  if (!takeGitSlot_(username, 8)) return gitClientError_('rate_limited');
+  var lock = LockService.getScriptLock();
+  var held = false;
+  try {
+    if (!lock.tryLock(25000)) {
+      releaseGitSlot_(username);
+      return gitClientError_('rate_limited');
+    }
+    held = true;
+
+    var loadedProposals = readClassificationProposalsStore_(cfg);
+    var found = findClassificationProposal_(loadedProposals.store, proposalId, questionIdHint);
+    if (!found) {
+      lock.releaseLock();
+      held = false;
+      releaseGitSlot_(username);
+      return { ok: false, error: 'not_found' };
+    }
+    var proposal = found.proposal;
+    var view = publicClassificationProposalView_(proposal);
+    var questionId = String(view && view.questionId || '').trim();
+    var fields = view && view.fields ? view.fields : [];
+    if (!questionId || !fields.length) {
+      lock.releaseLock();
+      held = false;
+      releaseGitSlot_(username);
+      return { ok: false, error: 'bad_request' };
+    }
+
+    var loadedBank = readSharedBankForPartsApprove_(cfg);
+    var qIndex = findBankQuestionIndex_(loadedBank.bank, questionId);
+    if (qIndex < 0) {
+      lock.releaseLock();
+      held = false;
+      releaseGitSlot_(username);
+      return { ok: false, error: 'not_found', message: '題庫找不到題目 ' + questionId };
+    }
+    var live = loadedBank.bank.questions[qIndex];
+    var currentSnap = publicBankClassificationSnapshot_(live, fields);
+    var proposedSnap = {
+      questionId: questionId,
+      fields: fields,
+      values: view.proposedValues,
+      reason: view.reason,
+      confidence: view.confidence
+    };
+
+    if (classificationNeedsOverwriteConfirm_(live, fields) && !confirmOverwrite) {
+      lock.releaseLock();
+      held = false;
+      releaseGitSlot_(username);
+      return {
+        ok: true,
+        needsConfirm: true,
+        proposalId: String(proposal.id || ''),
+        questionId: questionId,
+        current: currentSnap,
+        proposed: proposedSnap,
+        reviewedByAI: String(live.reviewedByAI || ''),
+        message: bankQuestionReviewedByAi_(live)
+          ? '題目已標記 reviewedByAI=Y。若要覆寫分類，請確認後再通過。'
+          : '題目已有分類資料。若要覆寫，請確認後再通過。'
+      };
+    }
+
+    for (var fi = 0; fi < fields.length; fi++) {
+      live[fields[fi]] = normalizeClassificationStringList_(view.proposedValues[fields[fi]]);
+    }
+    loadedBank.bank.questions[qIndex] = live;
+
+    var bankWritten = writeSharedBankForPartsApprove_(
+      cfg,
+      loadedBank.bank,
+      'Approve classification for ' + questionId
+    );
+
+    removeClassificationProposalAt_(loadedProposals.store, found.index);
+    var proposalsWritten = writeClassificationProposalsStore_(
+      cfg,
+      loadedProposals.store,
+      'Remove approved classification proposal ' + String(proposal.id || questionId)
+    );
+
+    lock.releaseLock();
+    held = false;
+    writeLog_({
+      username: username,
+      action: 'approveClassificationProposal',
+      success: true,
+      metadata: {
+        questionId: questionId,
+        proposalId: String(proposal.id || ''),
+        overwrite: confirmOverwrite === true,
+        fields: fields
+      }
+    }, true);
+    return {
+      ok: true,
+      needsConfirm: false,
+      questionId: questionId,
+      proposalId: String(proposal.id || ''),
+      question: publicBankClassificationSnapshot_(live, fields),
+      bankSha: bankWritten.sha,
+      bankPath: bankWritten.path,
+      proposalsSha: proposalsWritten.sha,
+      proposalsPath: proposalsWritten.path
+    };
+  } catch (err) {
+    if (held) {
+      try { lock.releaseLock(); } catch (ignore) {}
+      held = false;
+    }
+    safeLog_(err);
+    releaseGitSlot_(username);
+    var code = err && err.code ? err.code : 'github_error';
+    if (code === 'payload_too_large') return gitClientError_('payload_too_large');
+    if (code === 'github_not_found') return gitClientError_('github_not_found');
+    return gitClientError_('github_error');
+  }
+}
+
+function handleBulkApproveClassificationProposals_(body) {
+  var username = normalizeUsername_(body.username);
+  if (!username || !lookupRights_(username).admin) return { ok: false, error: 'feature_unavailable' };
+
+  var rawIds = Array.isArray(body.proposalIds)
+    ? body.proposalIds
+    : (Array.isArray(body.ids) ? body.ids : []);
+  var want = {};
+  var ordered = [];
+  rawIds.forEach(function (raw) {
+    var id = String(raw == null ? '' : raw).trim();
+    if (!id || want[id]) return;
+    want[id] = true;
+    ordered.push(id);
+  });
+  if (!ordered.length) return { ok: false, error: 'bad_request' };
+  if (ordered.length > 200) ordered = ordered.slice(0, 200);
+
+  var confirmOverwrite = body.confirmOverwrite === true
+    || body.confirmOverwrite === 'true'
+    || body.confirmOverwrite === 1;
+
+  var cfg = githubConfig_();
+  if (!githubDataReady_(cfg) || !githubSharedBankPath_(cfg)) {
+    return gitClientError_('github_not_configured');
+  }
+  if (!takeGitSlot_(username, 8)) return gitClientError_('rate_limited');
+  var lock = LockService.getScriptLock();
+  var held = false;
+  try {
+    if (!lock.tryLock(25000)) {
+      releaseGitSlot_(username);
+      return gitClientError_('rate_limited');
+    }
+    held = true;
+
+    var loadedProposals = readClassificationProposalsStore_(cfg);
+    var loadedBank = readSharedBankForPartsApprove_(cfg);
+
+    var approved = [];
+    var needsConfirm = [];
+    var failed = [];
+    var removeIndexes = [];
+    var i;
+
+    for (i = 0; i < ordered.length; i++) {
+      var proposalId = ordered[i];
+      var found = findClassificationProposal_(loadedProposals.store, proposalId, '');
+      if (!found) {
+        failed.push({ proposalId: proposalId, error: 'not_found', message: '找不到提案' });
+        continue;
+      }
+      var view = publicClassificationProposalView_(found.proposal);
+      var questionId = String(view && view.questionId || '').trim();
+      var fields = view && view.fields ? view.fields : [];
+      if (!questionId || !fields.length) {
+        failed.push({
+          proposalId: proposalId,
+          questionId: questionId,
+          error: 'bad_request',
+          message: '提案缺少有效分類欄位。'
+        });
+        continue;
+      }
+      var qIndex = findBankQuestionIndex_(loadedBank.bank, questionId);
+      if (qIndex < 0) {
+        failed.push({
+          proposalId: proposalId,
+          questionId: questionId,
+          error: 'not_found',
+          message: '題庫找不到題目 ' + questionId
+        });
+        continue;
+      }
+      var live = loadedBank.bank.questions[qIndex];
+      if (classificationNeedsOverwriteConfirm_(live, fields) && !confirmOverwrite) {
+        needsConfirm.push({
+          proposalId: String(found.proposal.id || proposalId),
+          questionId: questionId,
+          current: publicBankClassificationSnapshot_(live, fields),
+          proposed: {
+            questionId: questionId,
+            fields: fields,
+            values: view.proposedValues
+          },
+          reviewedByAI: String(live.reviewedByAI || '')
+        });
+        continue;
+      }
+      for (var fi = 0; fi < fields.length; fi++) {
+        live[fields[fi]] = normalizeClassificationStringList_(view.proposedValues[fields[fi]]);
+      }
+      loadedBank.bank.questions[qIndex] = live;
+      removeIndexes.push(found.index);
+      approved.push({
+        proposalId: String(found.proposal.id || proposalId),
+        questionId: questionId,
+        question: publicBankClassificationSnapshot_(live, fields)
+      });
+    }
+
+    removeIndexes.sort(function (a, b) { return b - a; });
+    var seenIdx = {};
+    for (i = 0; i < removeIndexes.length; i++) {
+      var idx = removeIndexes[i];
+      if (seenIdx[idx]) continue;
+      seenIdx[idx] = true;
+      removeClassificationProposalAt_(loadedProposals.store, idx);
+    }
+
+    var bankSha = '';
+    var bankPath = '';
+    var proposalsSha = '';
+    var proposalsPath = '';
+    if (approved.length) {
+      var bankWritten = writeSharedBankForPartsApprove_(
+        cfg,
+        loadedBank.bank,
+        'Bulk approve classification (' + approved.length + ')'
+      );
+      bankSha = bankWritten.sha;
+      bankPath = bankWritten.path;
+      var proposalsWritten = writeClassificationProposalsStore_(
+        cfg,
+        loadedProposals.store,
+        'Remove bulk-approved classification proposals (' + approved.length + ')'
+      );
+      proposalsSha = proposalsWritten.sha;
+      proposalsPath = proposalsWritten.path;
+    }
+
+    lock.releaseLock();
+    held = false;
+    writeLog_({
+      username: username,
+      action: 'bulkApproveClassificationProposals',
+      success: true,
+      metadata: {
+        approved: approved.length,
+        needsConfirm: needsConfirm.length,
+        failed: failed.length,
+        overwrite: confirmOverwrite === true
+      }
+    }, true);
+    return {
+      ok: true,
+      approved: approved,
+      needsConfirm: needsConfirm,
+      failed: failed,
+      bankSha: bankSha,
+      bankPath: bankPath,
+      proposalsSha: proposalsSha,
+      proposalsPath: proposalsPath
+    };
+  } catch (err) {
+    if (held) {
+      try { lock.releaseLock(); } catch (ignore) {}
+      held = false;
+    }
+    safeLog_(err);
+    releaseGitSlot_(username);
+    var code = err && err.code ? err.code : 'github_error';
+    if (code === 'payload_too_large') return gitClientError_('payload_too_large');
+    if (code === 'github_not_found') return gitClientError_('github_not_found');
+    return gitClientError_('github_error');
+  }
+}
+
+function handleBulkRejectClassificationProposals_(body) {
+  var username = normalizeUsername_(body.username);
+  if (!username || !lookupRights_(username).admin) return { ok: false, error: 'feature_unavailable' };
+  var rawIds = Array.isArray(body.proposalIds)
+    ? body.proposalIds
+    : (Array.isArray(body.ids) ? body.ids : []);
+  var want = {};
+  var ordered = [];
+  rawIds.forEach(function (raw) {
+    var id = String(raw == null ? '' : raw).trim();
+    if (!id || want[id]) return;
+    want[id] = true;
+    ordered.push(id);
+  });
+  if (!ordered.length) return { ok: false, error: 'bad_request' };
+  if (ordered.length > 200) ordered = ordered.slice(0, 200);
+
+  var saved = mutateClassificationProposalsStore_(
+    username,
+    'Bulk reject classification proposals (' + ordered.length + ')',
+    function (store) {
+      var rejected = [];
+      var failed = [];
+      var removeIndexes = [];
+      var i;
+      for (i = 0; i < ordered.length; i++) {
+        var proposalId = ordered[i];
+        var found = findClassificationProposal_(store, proposalId, '');
+        if (!found) {
+          failed.push({ proposalId: proposalId, error: 'not_found' });
+          continue;
+        }
+        rejected.push(publicClassificationProposalView_(found.proposal));
+        removeIndexes.push(found.index);
+      }
+      removeIndexes.sort(function (a, b) { return b - a; });
+      var seenIdx = {};
+      for (i = 0; i < removeIndexes.length; i++) {
+        var idx = removeIndexes[i];
+        if (seenIdx[idx]) continue;
+        seenIdx[idx] = true;
+        removeClassificationProposalAt_(store, idx);
+      }
+      return { ok: true, proposals: rejected, failed: failed };
+    }
+  );
+  if (!saved || saved.ok !== true) {
+    return { ok: false, error: (saved && saved.error) || 'github_error' };
+  }
+  writeLog_({
+    username: username,
+    action: 'bulkRejectClassificationProposals',
+    success: true,
+    metadata: { count: Array.isArray(saved.proposals) ? saved.proposals.length : 0 }
+  }, true);
+  return {
+    ok: true,
+    action: 'bulkRejectClassificationProposals',
+    rejected: Array.isArray(saved.proposals) ? saved.proposals : [],
+    failed: Array.isArray(saved.failed) ? saved.failed : [],
+    sha: saved.sha,
+    path: saved.path
+  };
+}
+
+function handleRejectClassificationProposal_(body) {
+  var username = normalizeUsername_(body.username);
+  if (!username || !lookupRights_(username).admin) return { ok: false, error: 'feature_unavailable' };
+  var proposalId = String(body.proposalId || body.id || '').trim();
+  var questionId = String(body.questionId || '').trim();
+  if (!proposalId && !questionId) return { ok: false, error: 'bad_request' };
+
+  var saved = mutateClassificationProposalsStore_(
+    username,
+    'Reject classification proposal ' + (proposalId || questionId),
+    function (store) {
+      var found = findClassificationProposal_(store, proposalId, questionId);
+      if (!found) return { ok: false, error: 'not_found' };
+      var removed = removeClassificationProposalAt_(store, found.index);
+      return { ok: true, proposal: publicClassificationProposalView_(removed) };
+    }
+  );
+  if (!saved || saved.ok !== true) {
+    return { ok: false, error: (saved && saved.error) || 'github_error' };
+  }
+  writeLog_({
+    username: username,
+    action: 'rejectClassificationProposal',
     success: true,
     metadata: {
       proposalId: saved.proposal && saved.proposal.id,
