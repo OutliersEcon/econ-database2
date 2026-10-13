@@ -50,9 +50,11 @@ Append objects to `proposals[]` with the same fields plus `id`, `createdAt`, `st
 
 Admin → **回饋／回報 → 分類審批**:
 
-- **通過** → `approveClassificationProposal` writes only listed fields on the bank question, then removes the staging row.
-- Overwrite confirm when a targeted field is already non-empty **or** `reviewedByAI === 'Y'` (`confirmOverwrite: true`).
-- **拒絕** → drop staging row only.
+- Per-field controls: **通過此欄** / **保留原值** for `concepts` and `stemPatterns` independently; row-level **通過全部欄位** / **全部保留原值** still available.
+- Proposed values are editable in the UI before approve. `approveClassificationProposal` accepts `approveFields` and `values` (edited arrays); empty array **clears** that bank field (UI shows a **清空** pill and confirms).
+- **保留原值** → `rejectClassificationProposal` with optional `rejectFields`: drop those fields from staging (or the whole row); does **not** write the bank. Distinguishable from clear/approve-empty.
+- Partial approve/reject leaves remaining fields on the staging row until all are decided.
+- Overwrite confirm when a targeted approve field is already non-empty **or** `reviewedByAI === 'Y'` (`confirmOverwrite: true`).
 - Banner when pending ≥ 200.
 
 ## Redeploy

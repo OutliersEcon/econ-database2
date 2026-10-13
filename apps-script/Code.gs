@@ -150,9 +150,9 @@
  * 分類提案 staging (shared/data/classification-proposals.json; concepts / stemPatterns):
  *   listClassificationProposals       → handleListClassificationProposals_       (admin)
  *   submitClassificationProposal      → handleSubmitClassificationProposal_      (admin|githubSync; pause≥200)
- *   approveClassificationProposal     → handleApproveClassificationProposal_     (admin; bank patch)
+ *   approveClassificationProposal     → handleApproveClassificationProposal_     (admin; bank patch; per-field + edited values)
  *   bulkApproveClassificationProposals → handleBulkApproveClassificationProposals_ (admin; bank patch)
- *   rejectClassificationProposal      → handleRejectClassificationProposal_      (admin)
+ *   rejectClassificationProposal      → handleRejectClassificationProposal_      (admin; optional rejectFields keeps other fields)
  *   bulkRejectClassificationProposals → handleBulkRejectClassificationProposals_ (admin)
  * Personal user settings (users/<username>/settings.json; known user; not bank SCHEMA):
  *   getUserSettings  → handleGetUserSettings_
@@ -3137,6 +3137,66 @@ function publicBankClassificationSnapshot_(question, fields) {
   };
 }
 
+
+function trimClassificationProposalFields_(proposal, removeFields) {
+  if (!proposal || typeof proposal !== 'object') return 0;
+  var remove = {};
+  var list = normalizeClassificationFields_(removeFields);
+  var i;
+  for (i = 0; i < list.length; i++) remove[list[i]] = true;
+  var fields = normalizeClassificationFields_(proposal.fields).filter(function (f) {
+    return !remove[f];
+  });
+  proposal.fields = fields;
+  if (proposal.proposedValues && typeof proposal.proposedValues === 'object') {
+    Object.keys(remove).forEach(function (f) { delete proposal.proposedValues[f]; });
+  }
+  if (proposal.currentValues && typeof proposal.currentValues === 'object') {
+    Object.keys(remove).forEach(function (f) { delete proposal.currentValues[f]; });
+  }
+  return fields.length;
+}
+
+/** Resolve approveFields / rejectFields / edited values for a proposal. */
+function resolveClassificationFieldActions_(body, proposalFields) {
+  var allFields = normalizeClassificationFields_(proposalFields);
+  var approveFields = normalizeClassificationFields_(
+    body && (body.approveFields != null ? body.approveFields : body.fields)
+  );
+  var rejectFields = normalizeClassificationFields_(body && body.rejectFields);
+  var i;
+  // Backward compatible: omit both → approve every field on the proposal.
+  if (!approveFields.length && !rejectFields.length) {
+    approveFields = allFields.slice();
+  }
+  var onProposal = {};
+  for (i = 0; i < allFields.length; i++) onProposal[allFields[i]] = true;
+  approveFields = approveFields.filter(function (f) { return onProposal[f]; });
+  var approveSet = {};
+  for (i = 0; i < approveFields.length; i++) approveSet[approveFields[i]] = true;
+  rejectFields = rejectFields.filter(function (f) {
+    return onProposal[f] && !approveSet[f];
+  });
+  return { approveFields: approveFields, rejectFields: rejectFields, allFields: allFields };
+}
+
+function classificationWriteValuesFromBody_(body, approveFields, proposedValues) {
+  var edited = {};
+  if (body && body.values && typeof body.values === 'object') edited = body.values;
+  else if (body && body.editedValues && typeof body.editedValues === 'object') edited = body.editedValues;
+  var proposed = proposedValues && typeof proposedValues === 'object' ? proposedValues : {};
+  var out = {};
+  for (var i = 0; i < approveFields.length; i++) {
+    var f = approveFields[i];
+    if (Object.prototype.hasOwnProperty.call(edited, f)) {
+      out[f] = normalizeClassificationStringList_(edited[f]);
+    } else {
+      out[f] = normalizeClassificationStringList_(proposed[f]);
+    }
+  }
+  return out;
+}
+
 function classificationNeedsOverwriteConfirm_(question, fields) {
   if (bankQuestionReviewedByAi_(question)) return true;
   for (var i = 0; i < fields.length; i++) {
@@ -3476,13 +3536,75 @@ function handleApproveClassificationProposal_(body) {
     var proposal = found.proposal;
     var view = publicClassificationProposalView_(proposal);
     var questionId = String(view && view.questionId || '').trim();
-    var fields = view && view.fields ? view.fields : [];
-    if (!questionId || !fields.length) {
+    if (!questionId || !view.fields.length) {
       lock.releaseLock();
       held = false;
       releaseGitSlot_(username);
       return { ok: false, error: 'bad_request' };
     }
+
+    var actions = resolveClassificationFieldActions_(body, view.fields);
+    var approveFields = actions.approveFields;
+    var rejectFields = actions.rejectFields;
+    if (!approveFields.length && !rejectFields.length) {
+      lock.releaseLock();
+      held = false;
+      releaseGitSlot_(username);
+      return { ok: false, error: 'bad_request', message: '沒有可通過或保留原值的欄位。' };
+    }
+
+    // Reject-only (no bank write): drop rejectFields from staging.
+    if (!approveFields.length) {
+      var remainingCount = trimClassificationProposalFields_(proposal, rejectFields);
+      var proposalRemaining = null;
+      if (remainingCount <= 0) {
+        removeClassificationProposalAt_(loadedProposals.store, found.index);
+      } else {
+        loadedProposals.store.proposals[found.index] = proposal;
+        proposalRemaining = publicClassificationProposalView_(proposal);
+      }
+      var proposalsWrittenOnly = writeClassificationProposalsStore_(
+        cfg,
+        loadedProposals.store,
+        'Keep-original classification fields for ' + questionId
+      );
+      lock.releaseLock();
+      held = false;
+      writeLog_({
+        username: username,
+        action: 'approveClassificationProposal',
+        success: true,
+        metadata: {
+          questionId: questionId,
+          proposalId: String(proposal.id || ''),
+          approveFields: [],
+          rejectFields: rejectFields,
+          removed: remainingCount <= 0
+        }
+      }, true);
+      return {
+        ok: true,
+        needsConfirm: false,
+        questionId: questionId,
+        proposalId: String(proposal.id || ''),
+        approvedFields: [],
+        rejectedFields: rejectFields,
+        question: null,
+        proposalRemaining: proposalRemaining,
+        removed: remainingCount <= 0,
+        proposalsSha: proposalsWrittenOnly.sha,
+        proposalsPath: proposalsWrittenOnly.path
+      };
+    }
+
+    var writeValues = classificationWriteValuesFromBody_(body, approveFields, view.proposedValues);
+    var proposedSnap = {
+      questionId: questionId,
+      fields: approveFields,
+      values: writeValues,
+      reason: view.reason,
+      confidence: view.confidence
+    };
 
     var loadedBank = readSharedBankForPartsApprove_(cfg);
     var qIndex = findBankQuestionIndex_(loadedBank.bank, questionId);
@@ -3493,16 +3615,9 @@ function handleApproveClassificationProposal_(body) {
       return { ok: false, error: 'not_found', message: '題庫找不到題目 ' + questionId };
     }
     var live = loadedBank.bank.questions[qIndex];
-    var currentSnap = publicBankClassificationSnapshot_(live, fields);
-    var proposedSnap = {
-      questionId: questionId,
-      fields: fields,
-      values: view.proposedValues,
-      reason: view.reason,
-      confidence: view.confidence
-    };
+    var currentSnap = publicBankClassificationSnapshot_(live, approveFields);
 
-    if (classificationNeedsOverwriteConfirm_(live, fields) && !confirmOverwrite) {
+    if (classificationNeedsOverwriteConfirm_(live, approveFields) && !confirmOverwrite) {
       lock.releaseLock();
       held = false;
       releaseGitSlot_(username);
@@ -3511,6 +3626,8 @@ function handleApproveClassificationProposal_(body) {
         needsConfirm: true,
         proposalId: String(proposal.id || ''),
         questionId: questionId,
+        approveFields: approveFields,
+        rejectFields: rejectFields,
         current: currentSnap,
         proposed: proposedSnap,
         reviewedByAI: String(live.reviewedByAI || ''),
@@ -3520,22 +3637,33 @@ function handleApproveClassificationProposal_(body) {
       };
     }
 
-    for (var fi = 0; fi < fields.length; fi++) {
-      live[fields[fi]] = normalizeClassificationStringList_(view.proposedValues[fields[fi]]);
+    var fi;
+    for (fi = 0; fi < approveFields.length; fi++) {
+      live[approveFields[fi]] = writeValues[approveFields[fi]];
     }
     loadedBank.bank.questions[qIndex] = live;
 
     var bankWritten = writeSharedBankForPartsApprove_(
       cfg,
       loadedBank.bank,
-      'Approve classification for ' + questionId
+      'Approve classification for ' + questionId + ' (' + approveFields.join(',') + ')'
     );
 
-    removeClassificationProposalAt_(loadedProposals.store, found.index);
+    var dropFields = approveFields.concat(rejectFields);
+    var left = trimClassificationProposalFields_(proposal, dropFields);
+    var remaining = null;
+    if (left <= 0) {
+      removeClassificationProposalAt_(loadedProposals.store, found.index);
+    } else {
+      loadedProposals.store.proposals[found.index] = proposal;
+      remaining = publicClassificationProposalView_(proposal);
+    }
     var proposalsWritten = writeClassificationProposalsStore_(
       cfg,
       loadedProposals.store,
-      'Remove approved classification proposal ' + String(proposal.id || questionId)
+      left <= 0
+        ? ('Remove approved classification proposal ' + String(proposal.id || questionId))
+        : ('Partial approve classification proposal ' + String(proposal.id || questionId))
     );
 
     lock.releaseLock();
@@ -3548,7 +3676,9 @@ function handleApproveClassificationProposal_(body) {
         questionId: questionId,
         proposalId: String(proposal.id || ''),
         overwrite: confirmOverwrite === true,
-        fields: fields
+        approveFields: approveFields,
+        rejectFields: rejectFields,
+        removed: left <= 0
       }
     }, true);
     return {
@@ -3556,7 +3686,11 @@ function handleApproveClassificationProposal_(body) {
       needsConfirm: false,
       questionId: questionId,
       proposalId: String(proposal.id || ''),
-      question: publicBankClassificationSnapshot_(live, fields),
+      approvedFields: approveFields,
+      rejectedFields: rejectFields,
+      question: publicBankClassificationSnapshot_(live, approveFields),
+      proposalRemaining: remaining,
+      removed: left <= 0,
       bankSha: bankWritten.sha,
       bankPath: bankWritten.path,
       proposalsSha: proposalsWritten.sha,
@@ -3816,18 +3950,60 @@ function handleRejectClassificationProposal_(body) {
   var questionId = String(body.questionId || '').trim();
   if (!proposalId && !questionId) return { ok: false, error: 'bad_request' };
 
+  var rejectFields = normalizeClassificationFields_(body && body.rejectFields);
   var saved = mutateClassificationProposalsStore_(
     username,
-    'Reject classification proposal ' + (proposalId || questionId),
+    rejectFields.length
+      ? ('Keep-original classification fields ' + rejectFields.join(',') + ' for ' + (proposalId || questionId))
+      : ('Reject classification proposal ' + (proposalId || questionId)),
     function (store) {
       var found = findClassificationProposal_(store, proposalId, questionId);
       if (!found) return { ok: false, error: 'not_found' };
-      var removed = removeClassificationProposalAt_(store, found.index);
-      return { ok: true, proposal: publicClassificationProposalView_(removed) };
+      var proposal = found.proposal;
+      var view = publicClassificationProposalView_(proposal);
+      if (!rejectFields.length) {
+        var removed = removeClassificationProposalAt_(store, found.index);
+        return {
+          ok: true,
+          proposal: publicClassificationProposalView_(removed),
+          rejectedFields: view ? view.fields : [],
+          proposalRemaining: null,
+          removed: true
+        };
+      }
+      var onProposal = {};
+      (view.fields || []).forEach(function (f) { onProposal[f] = true; });
+      var drop = rejectFields.filter(function (f) { return onProposal[f]; });
+      if (!drop.length) {
+        return { ok: false, error: 'bad_request', message: '提案沒有這些欄位。' };
+      }
+      var left = trimClassificationProposalFields_(proposal, drop);
+      if (left <= 0) {
+        var gone = removeClassificationProposalAt_(store, found.index);
+        return {
+          ok: true,
+          proposal: publicClassificationProposalView_(gone),
+          rejectedFields: drop,
+          proposalRemaining: null,
+          removed: true
+        };
+      }
+      store.proposals[found.index] = proposal;
+      return {
+        ok: true,
+        proposal: view,
+        rejectedFields: drop,
+        proposalRemaining: publicClassificationProposalView_(proposal),
+        removed: false
+      };
     }
   );
   if (!saved || saved.ok !== true) {
-    return { ok: false, error: (saved && saved.error) || 'github_error' };
+    return {
+      ok: false,
+      error: (saved && saved.error) || 'github_error',
+      message: saved && saved.message ? saved.message : ''
+    };
   }
   writeLog_({
     username: username,
@@ -3835,12 +4011,17 @@ function handleRejectClassificationProposal_(body) {
     success: true,
     metadata: {
       proposalId: saved.proposal && saved.proposal.id,
-      questionId: saved.proposal && saved.proposal.questionId
+      questionId: saved.proposal && saved.proposal.questionId,
+      rejectedFields: saved.rejectedFields || [],
+      removed: saved.removed === true
     }
   }, true);
   return {
     ok: true,
     proposal: saved.proposal,
+    rejectedFields: saved.rejectedFields || [],
+    proposalRemaining: saved.proposalRemaining || null,
+    removed: saved.removed === true,
     sha: saved.sha,
     path: saved.path
   };

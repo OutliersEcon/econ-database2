@@ -415,6 +415,26 @@
                 rejectPartsProposal(rejectBtn.getAttribute('data-parts-reject'));
                 return;
             }
+            var classApproveFieldBtn = event.target.closest('[data-class-approve-field]');
+            if (classApproveFieldBtn && !hubState.busy) {
+                approveClassificationProposal(
+                    classApproveFieldBtn.getAttribute('data-class-id'),
+                    {
+                        approveFields: [classApproveFieldBtn.getAttribute('data-class-approve-field')]
+                    }
+                );
+                return;
+            }
+            var classKeepFieldBtn = event.target.closest('[data-class-keep-field]');
+            if (classKeepFieldBtn && !hubState.busy) {
+                rejectClassificationProposal(
+                    classKeepFieldBtn.getAttribute('data-class-id'),
+                    {
+                        rejectFields: [classKeepFieldBtn.getAttribute('data-class-keep-field')]
+                    }
+                );
+                return;
+            }
             var classApproveBtn = event.target.closest('[data-class-approve]');
             if (classApproveBtn && !hubState.busy) {
                 approveClassificationProposal(classApproveBtn.getAttribute('data-class-approve'));
@@ -446,7 +466,7 @@
                 subtitle.textContent = '待審批的分題提案（通過會寫入共用題庫；拒絕只移除提案）。';
             } else if (classMode) {
                 var n = hubState.classPendingCount || (hubState.classRows || []).length;
-                subtitle.textContent = '待審批的分類提案（concepts／stemPatterns；通過會寫入共用題庫；拒絕只移除提案）。目前待審：'
+                subtitle.textContent = '待審批的分類提案（可逐欄通過／保留原值；通過前可改提案內容）。目前待審：'
                     + n + '／' + (hubState.classPauseThreshold || 200) + '。';
             } else {
                 subtitle.textContent = 'AI解釋評分／Feedback、使用者問題回報、分題提案審批，同埋分類提案審批。';
@@ -766,16 +786,33 @@
                 var proposed = row.proposedValues || {};
                 var fieldBlocks = fields.map(function (field) {
                     var label = field === 'stemPatterns' ? '題幹模式' : (field === 'concepts' ? '概念' : field);
+                    var proposedList = Array.isArray(proposed[field]) ? proposed[field] : [];
+                    var isClear = !proposedList.length;
+                    var clearPill = isClear
+                        ? ' <span class="feedback-hub-class-pill is-clear" title="通過此欄會清空題庫該欄">清空</span>'
+                        : '';
+                    var editText = classListToEditText(proposedList);
                     return ''
-                        + '<div class="feedback-hub-class-field">'
-                        + '  <strong>' + esc(label) + '</strong>'
+                        + '<div class="feedback-hub-class-field" data-class-field="' + esc(field) + '">'
+                        + '  <div class="feedback-hub-class-field-head">'
+                        + '    <strong>' + esc(label) + '</strong>' + clearPill
+                        + '  </div>'
                         + '  <div class="feedback-hub-class-diff">'
                         + '    <span class="feedback-hub-class-label">現有</span>'
                         + '    <code>' + esc(formatClassList(current[field])) + '</code>'
                         + '  </div>'
-                        + '  <div class="feedback-hub-class-diff">'
+                        + '  <div class="feedback-hub-class-diff feedback-hub-class-edit">'
                         + '    <span class="feedback-hub-class-label">提案</span>'
-                        + '    <code>' + esc(formatClassList(proposed[field])) + '</code>'
+                        + '    <input type="text" class="feedback-hub-class-input" data-class-edit-field="'
+                        + esc(field) + '" value="' + esc(editText)
+                        + '" placeholder="逗號分隔；留空＝通過時清空" autocomplete="off">'
+                        + '  </div>'
+                        + '  <div class="feedback-hub-class-field-actions">'
+                        + '    <button type="button" class="btn btn-primary btn-sm" data-class-id="'
+                        + esc(id) + '" data-class-approve-field="' + esc(field) + '">通過此欄</button>'
+                        + '    <button type="button" class="btn btn-secondary btn-sm" data-class-id="'
+                        + esc(id) + '" data-class-keep-field="' + esc(field)
+                        + '" title="不寫入題庫，只從提案移除此欄">保留原值</button>'
                         + '  </div>'
                         + '</div>';
                 }).join('');
@@ -800,9 +837,9 @@
                     + (row.reason ? '  <p class="feedback-hub-text">理由：' + esc(row.reason) + '</p>' : '')
                     + '  <div class="feedback-hub-meta">'
                     + '    <button type="button" class="btn btn-primary btn-sm" data-class-approve="'
-                    + esc(id) + '">通過</button>'
+                    + esc(id) + '">通過全部欄位</button>'
                     + '    <button type="button" class="btn btn-outline-danger btn-sm" data-class-reject="'
-                    + esc(id) + '">拒絕</button>'
+                    + esc(id) + '" title="不寫入題庫，整筆提案移除">全部保留原值</button>'
                     + '  </div>'
                     + '</article>';
             }).join('');
@@ -1082,6 +1119,51 @@
             .filter(Boolean).join(' ｜ ');
     }
 
+    function classListToEditText(values) {
+        if (!Array.isArray(values) || !values.length) return '';
+        return values.map(function (item) { return String(item == null ? '' : item).trim(); })
+            .filter(Boolean).join(', ');
+    }
+
+    function editTextToClassList(text) {
+        return String(text == null ? '' : text)
+            .split(/[,，|｜]/)
+            .map(function (item) { return item.trim(); })
+            .filter(Boolean);
+    }
+
+    function readClassEditsFromDom(proposalId) {
+        var article = hubOverlay && hubOverlay.querySelector(
+            '.feedback-hub-row[data-class-id="' + String(proposalId || '').replace(/"/g, '') + '"]'
+        );
+        var values = {};
+        if (!article) return values;
+        article.querySelectorAll('[data-class-edit-field]').forEach(function (input) {
+            var field = input.getAttribute('data-class-edit-field');
+            if (field !== 'concepts' && field !== 'stemPatterns') return;
+            values[field] = editTextToClassList(input.value);
+        });
+        return values;
+    }
+
+    function applyClassProposalRemaining(proposalId, remaining) {
+        var id = String(proposalId || '');
+        if (!id) return;
+        if (!remaining || !Array.isArray(remaining.fields) || !remaining.fields.length) {
+            hubState.classRows = (hubState.classRows || []).filter(function (item) {
+                return !(item && String(item.id) === id);
+            });
+            delete hubState.selected[id];
+        } else {
+            hubState.classRows = (hubState.classRows || []).map(function (item) {
+                if (!item || String(item.id) !== id) return item;
+                return remaining;
+            });
+        }
+        hubState.classPendingCount = (hubState.classRows || []).length;
+        hubState.classPaused = hubState.classPendingCount >= (hubState.classPauseThreshold || 200);
+    }
+
     function findClassRow(proposalId) {
         var id = String(proposalId || '');
         var rows = hubState.classRows || [];
@@ -1128,20 +1210,65 @@
         }).join('\n');
     }
 
-    async function approveClassificationProposal(proposalId) {
+    async function approveClassificationProposal(proposalId, options) {
         if (hubState.busy || !hasAdminAccess()) return;
         var row = findClassRow(proposalId);
         if (!row) return;
+        options = options || {};
+        var edits = readClassEditsFromDom(row.id);
+        var approveFields = Array.isArray(options.approveFields) && options.approveFields.length
+            ? options.approveFields.filter(function (f) {
+                return f === 'concepts' || f === 'stemPatterns';
+            })
+            : (Array.isArray(row.fields) ? row.fields.slice() : []);
+        if (!approveFields.length) {
+            setHubBanner('沒有可通過的欄位。', 'warn');
+            return;
+        }
+        var values = {};
+        approveFields.forEach(function (field) {
+            if (Object.prototype.hasOwnProperty.call(edits, field)) {
+                values[field] = edits[field];
+            } else if (row.proposedValues && Object.prototype.hasOwnProperty.call(row.proposedValues, field)) {
+                values[field] = Array.isArray(row.proposedValues[field])
+                    ? row.proposedValues[field].slice()
+                    : [];
+            } else {
+                values[field] = [];
+            }
+        });
+        var clearFields = approveFields.filter(function (field) {
+            return !values[field] || !values[field].length;
+        });
+        if (clearFields.length) {
+            var clearLabels = clearFields.map(function (field) {
+                return field === 'stemPatterns' ? '題幹模式' : '概念';
+            }).join('、');
+            var clearOk = global.confirm
+                ? global.confirm(
+                    '題目「' + String(row.questionId || '') + '」的「' + clearLabels
+                    + '」通過後會清空題庫該欄。確定？'
+                )
+                : true;
+            if (!clearOk) {
+                setHubBanner('已取消清空。', 'warn');
+                return;
+            }
+        }
+
         hubState.busy = true;
         syncBulkButton();
         setHubBanner('通過中…', 'info');
         try {
-            var data = await proxyAction({
+            var payload = {
                 action: 'approveClassificationProposal',
                 proposalId: String(row.id || ''),
                 questionId: String(row.questionId || ''),
+                approveFields: approveFields,
+                values: values,
                 confirmOverwrite: false
-            }, 120000);
+            };
+            var data = await proxyAction(payload, 120000);
             if (!data) {
                 setHubBanner(errorMessage('github_error'), 'error');
                 return;
@@ -1153,7 +1280,7 @@
                     ? global.confirm(
                         '題目「' + String(row.questionId || '') + '」已有分類或 reviewedByAI=Y。確定覆寫？\n\n'
                         + '現有：\n' + currentPreview + '\n\n'
-                        + '提案：\n' + proposedPreview
+                        + '將寫入：\n' + proposedPreview
                     )
                     : false;
                 if (!ok) {
@@ -1161,12 +1288,8 @@
                     return;
                 }
                 setHubBanner('覆寫並通過中…', 'info');
-                data = await proxyAction({
-                    action: 'approveClassificationProposal',
-                    proposalId: String(row.id || ''),
-                    questionId: String(row.questionId || ''),
-                    confirmOverwrite: true
-                }, 120000);
+                payload.confirmOverwrite = true;
+                data = await proxyAction(payload, 120000);
             }
             if (!data || data.ok !== true) {
                 setHubBanner(
@@ -1175,13 +1298,12 @@
                 );
                 return;
             }
-            hubState.classRows = (hubState.classRows || []).filter(function (item) {
-                return !(item && String(item.id) === String(row.id));
-            });
-            hubState.classPendingCount = Math.max(0, (hubState.classPendingCount || 1) - 1);
-            hubState.classPaused = hubState.classPendingCount >= (hubState.classPauseThreshold || 200);
             await applyApprovedClassificationLocally(data.question);
-            setHubBanner('已通過並寫入題庫：' + String(row.questionId || ''), 'ok');
+            applyClassProposalRemaining(row.id, data.proposalRemaining);
+            var fieldNote = (data.approvedFields && data.approvedFields.length)
+                ? '（' + data.approvedFields.join('、') + '）'
+                : '';
+            setHubBanner('已通過並寫入題庫：' + String(row.questionId || '') + fieldNote, 'ok');
             syncHubChrome();
             renderHubList();
         } catch (err) {
@@ -1192,33 +1314,57 @@
         }
     }
 
-    async function rejectClassificationProposal(proposalId) {
+    async function rejectClassificationProposal(proposalId, options) {
         if (hubState.busy || !hasAdminAccess()) return;
         var row = findClassRow(proposalId);
         if (!row) return;
+        options = options || {};
+        var rejectFields = Array.isArray(options.rejectFields) && options.rejectFields.length
+            ? options.rejectFields.filter(function (f) {
+                return f === 'concepts' || f === 'stemPatterns';
+            })
+            : [];
+        var partial = rejectFields.length > 0;
+        var label = partial
+            ? rejectFields.map(function (field) {
+                return field === 'stemPatterns' ? '題幹模式' : '概念';
+            }).join('、')
+            : '全部欄位';
         var ok = global.confirm
-            ? global.confirm('拒絕題目「' + String(row.questionId || '') + '」的分類提案？提案會從暫存移除，不會改題庫。')
+            ? global.confirm(
+                partial
+                    ? '保留題目「' + String(row.questionId || '') + '」的「' + label
+                        + '」原值？該欄會從提案移除，不會改題庫。'
+                    : '全部保留原值並移除題目「' + String(row.questionId || '')
+                        + '」的分類提案？不會改題庫。'
+            )
             : true;
         if (!ok) return;
         hubState.busy = true;
         syncBulkButton();
-        setHubBanner('拒絕中…', 'info');
+        setHubBanner(partial ? '保留原值中…' : '拒絕中…', 'info');
         try {
-            var data = await proxyAction({
+            var payload = {
                 action: 'rejectClassificationProposal',
                 proposalId: String(row.id || ''),
                 questionId: String(row.questionId || '')
-            }, 60000);
+            };
+            if (partial) payload.rejectFields = rejectFields;
+            var data = await proxyAction(payload, 60000);
             if (!data || data.ok !== true) {
-                setHubBanner(errorMessage(data && data.error), 'error');
+                setHubBanner(
+                    (data && data.message && String(data.message)) || errorMessage(data && data.error),
+                    'error'
+                );
                 return;
             }
-            hubState.classRows = (hubState.classRows || []).filter(function (item) {
-                return !(item && String(item.id) === String(row.id));
-            });
-            hubState.classPendingCount = Math.max(0, (hubState.classPendingCount || 1) - 1);
-            hubState.classPaused = hubState.classPendingCount >= (hubState.classPauseThreshold || 200);
-            setHubBanner('已拒絕並移除提案：' + String(row.questionId || ''), 'ok');
+            applyClassProposalRemaining(row.id, data.proposalRemaining);
+            setHubBanner(
+                partial
+                    ? '已保留原值並移出提案欄位：' + String(row.questionId || '') + '（' + label + '）'
+                    : '已全部保留原值並移除提案：' + String(row.questionId || ''),
+                'ok'
+            );
             syncHubChrome();
             renderHubList();
         } catch (err) {
