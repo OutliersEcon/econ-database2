@@ -1,6 +1,6 @@
 // 回報問題 — UI for any authenticated session; Apps Script reportIssue requires
 // a known hash (rights.known). Persist: shared/data/issue-reports.json
-// (reportIssue / listIssueReports / update*Status). Admin hub「回饋／回報」
+// (reportIssue / listIssueReports / update*Status). Admin hub「審批與回報」
 // combines AI解釋 Feedback、問題回報、分題審批、分類審批 (concepts / stemPatterns).
 // Dependencies: access-rights, github-sync (gitProxyRequest / gitUsername),
 // optional PoeGenerate.proxyRequest, AiExplanation admin hooks, question-fields.
@@ -287,8 +287,8 @@
         button.id = 'feedback-hub-admin-btn';
         button.className = 'btn btn-outline-primary header-toolbar-btn';
         button.hidden = true;
-        button.textContent = '回饋／回報';
-        button.setAttribute('aria-label', '瀏覽 AI解釋 Feedback、問題回報、分題審批同埋分類審批');
+        button.textContent = '審批與回報';
+        button.setAttribute('aria-label', '審批與回報：AI解釋 Feedback、問題回報、分題審批同埋分類審批');
         button.dataset.bound = '1';
         button.addEventListener('click', openFeedbackHub);
         var anchor = document.getElementById('data-checks-btn')
@@ -319,7 +319,7 @@
             + '<div class="report-issue-dialog feedback-hub-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-hub-title">'
             + '  <header class="report-issue-header">'
             + '    <div>'
-            + '      <h2 id="feedback-hub-title">回饋／回報</h2>'
+            + '      <h2 id="feedback-hub-title">審批與回報</h2>'
             + '      <p class="report-issue-subtitle" id="feedback-hub-subtitle">AI解釋評分／Feedback、使用者問題回報、分題提案審批，同埋分類提案審批。</p>'
             + '    </div>'
             + '    <button type="button" class="report-issue-close" aria-label="關閉">×</button>'
