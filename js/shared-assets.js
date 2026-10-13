@@ -66,6 +66,8 @@ function sharedAssetPathOk(value) {
 function sharedMockOnlyPath(rel) {
     var path = String(rel || '');
     if (path === 'data/database.js') return true;
+    // 雅集 publisher shard — mockTests users only (HKEAA shard stays open).
+    if (path === 'data/database-aristo.json') return true;
     if (path === 'build' || path.indexOf('build/') === 0) return true;
     if (path === 'diagrams' || path.indexOf('diagrams/') === 0) return true;
     if (path === 'papers/mock-tests' || path.indexOf('papers/mock-tests/') === 0) return true;
@@ -371,15 +373,79 @@ async function fetchSharedAssetDirectOrProxy(rel, timeoutMs) {
     }
 }
 
-async function fetchSharedQuestionBank() {
-    var data = await fetchSharedAssetDirectOrProxy('data/database.json', 180000);
+// Publisher shards in the private data repo (Phase 2 merge-on-load).
+// Combined data/database.json remains the upload target and load fallback.
+var SHARED_BANK_COMBINED_REL = 'data/database.json';
+var SHARED_BANK_HKEAA_REL = 'data/database-hkeaa.json';
+var SHARED_BANK_ARISTO_REL = 'data/database-aristo.json';
+
+function sharedBankHasMockAccess() {
+    if (sharedReadSession && sharedReadSession.mockTests === true) return true;
+    if (window.accessRights && window.accessRights.mockTests === true) return true;
+    return false;
+}
+
+function sharedBankQuestionsFromPayload(payload) {
+    if (Array.isArray(payload)) return payload;
+    if (payload && typeof payload === 'object' && Array.isArray(payload.questions)) {
+        return payload.questions;
+    }
+    return null;
+}
+
+function mergeSharedBankShards(hkeaaPayload, aristoPayload) {
+    var hkeaaQs = sharedBankQuestionsFromPayload(hkeaaPayload);
+    var aristoQs = sharedBankQuestionsFromPayload(aristoPayload);
+    if (!hkeaaQs || !aristoQs) {
+        throw sharedAssetFailure({ error: 'github_error' });
+    }
+    var questions = hkeaaQs.concat(aristoQs);
+    var base = (hkeaaPayload && !Array.isArray(hkeaaPayload) && typeof hkeaaPayload === 'object')
+        ? Object.assign({}, hkeaaPayload)
+        : {};
+    base.questions = questions;
+    base.questionCount = questions.length;
+    return base;
+}
+
+async function parseSharedBankAsset(rel) {
+    var data = await fetchSharedAssetDirectOrProxy(rel, 180000);
     if (data.encoding !== 'utf8' || typeof data.content !== 'string') {
         throw sharedAssetFailure({ error: 'github_error' });
     }
     try {
-        return JSON.parse(data.content);
+        var parsed = JSON.parse(data.content);
+        if (!sharedBankQuestionsFromPayload(parsed)) {
+            throw sharedAssetFailure({ error: 'github_error' });
+        }
+        return parsed;
     } catch (error) {
+        if (error && error.code) throw error;
         throw sharedAssetFailure({ error: 'github_error' });
+    }
+}
+
+async function fetchSharedQuestionBankCombinedFallback() {
+    return parseSharedBankAsset(SHARED_BANK_COMBINED_REL);
+}
+
+async function fetchSharedQuestionBank() {
+    // mockTests: HKEAA shard then 雅集 shard, concat, questionCount = sum.
+    // without mockTests: HKEAA only (do not download 雅集).
+    // any shard failure → combined database.json + existing strip behavior.
+    try {
+        if (sharedBankHasMockAccess()) {
+            var hkeaa = await parseSharedBankAsset(SHARED_BANK_HKEAA_REL);
+            var aristo = await parseSharedBankAsset(SHARED_BANK_ARISTO_REL);
+            return mergeSharedBankShards(hkeaa, aristo);
+        }
+        return await parseSharedBankAsset(SHARED_BANK_HKEAA_REL);
+    } catch (shardErr) {
+        try {
+            return await fetchSharedQuestionBankCombinedFallback();
+        } catch (fallbackErr) {
+            throw shardErr && shardErr.code ? shardErr : fallbackErr;
+        }
     }
 }
 
