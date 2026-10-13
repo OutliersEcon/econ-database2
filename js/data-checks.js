@@ -4,10 +4,12 @@
 // What this is
 // ------------
 // A small, independent panel that lists consistency checks over the loaded
-// question bank. Each check is a free combination of conditions (AND).
-// Matching questions that are not in that check's exception list are the ones
-// that still need handling. Matching questions that are listed as exceptions
-// are counted separately and are not part of the "needs handling" set.
+// question bank. Each check has a mode plus a free combination of conditions
+// (AND). Default mode perQuestion: every matching question (minus exceptions)
+// needs handling. Mode crossPaperSameYear (UI: 同年跨卷重疊): match with the
+// same conditions, then group by examination + year; a group is a hit only when
+// ≥2 distinct non-empty paper values appear — all matching IDs in hit groups
+// (minus exceptions) need handling. Exceptions are unchanged in both modes.
 //
 // Who can see it
 // --------------
@@ -38,6 +40,8 @@
 // {
 //   id: 'stable-slug',
 //   name: 'Short Traditional Chinese label',
+//   // perQuestion (default; omit or explicit) | crossPaperSameYear (同年跨卷重疊)
+//   mode: 'perQuestion',
 //   conditions: [
 //     // Preferred shape (saved by the editor):
 //     //   { include: true|false, field: '<real field id>', value: '…' }
@@ -188,6 +192,12 @@
         return m ? m.normalizeCondition(raw) : null;
     }
 
+    function normalizeCheckMode(rawMode) {
+        var mode = String(rawMode == null ? '' : rawMode).trim();
+        if (mode === 'crossPaperSameYear') return 'crossPaperSameYear';
+        return 'perQuestion';
+    }
+
     function normalizeCheck(raw, index) {
         if (!raw || typeof raw !== 'object') return null;
         var id = String(raw.id == null ? '' : raw.id).trim();
@@ -203,6 +213,7 @@
         return {
             id: id,
             name: String(raw.name == null ? '' : raw.name).trim() || '未命名檢查',
+            mode: normalizeCheckMode(raw.mode),
             conditions: conditions,
             exceptions: exceptions
         };
@@ -503,7 +514,28 @@
         return set;
     }
 
-    function evaluateCheck(questions, check) {
+    function yearKeyForCheck(year) {
+        if (typeof normalizeYearFilterKey === 'function') {
+            var keyed = normalizeYearFilterKey(year);
+            return String(keyed == null ? '' : keyed).trim();
+        }
+        return String(year == null ? '' : year).trim();
+    }
+
+    function examKeyForCheck(examination) {
+        return String(examination == null ? '' : examination).trim();
+    }
+
+    function paperKeyForCheck(paper) {
+        return String(paper == null ? '' : paper).trim();
+    }
+
+    function sortIdsLocale(list) {
+        list.sort(function (a, b) { return a.localeCompare(b, 'zh-HK'); });
+        return list;
+    }
+
+    function evaluatePerQuestionCheck(questions, check) {
         var excepted = exceptionSet(check);
         var needs = [];
         var exceptions = [];
@@ -514,15 +546,114 @@
             else if (id) needs.push(id);
             else needs.push('(無編號)');
         });
-        needs.sort(function (a, b) { return a.localeCompare(b, 'zh-HK'); });
-        exceptions.sort(function (a, b) { return a.localeCompare(b, 'zh-HK'); });
+        sortIdsLocale(needs);
+        sortIdsLocale(exceptions);
         return {
             check: check,
+            mode: 'perQuestion',
             needsHandling: needs,
             exceptionIds: exceptions,
             needsCount: needs.length,
-            exceptionCount: exceptions.length
+            exceptionCount: exceptions.length,
+            hitGroups: []
         };
+    }
+
+    function evaluateCrossPaperSameYearCheck(questions, check) {
+        var excepted = exceptionSet(check);
+        var groups = {};
+        (questions || []).forEach(function (question) {
+            if (!matchesCheck(question, check)) return;
+            var exam = examKeyForCheck(question && question.examination);
+            var yKey = yearKeyForCheck(question && question.year);
+            var groupKey = exam + '\0' + yKey;
+            if (!groups[groupKey]) {
+                groups[groupKey] = {
+                    examination: exam,
+                    yearKey: yKey,
+                    papers: {},
+                    ids: []
+                };
+            }
+            var paper = paperKeyForCheck(question && question.paper);
+            if (paper) groups[groupKey].papers[paper] = true;
+            var id = String(question && question.id != null ? question.id : '').trim();
+            groups[groupKey].ids.push(id || '(無編號)');
+        });
+
+        var needs = [];
+        var exceptions = [];
+        var hitGroups = [];
+        var seenNeed = {};
+        var seenExc = {};
+
+        Object.keys(groups).forEach(function (groupKey) {
+            var group = groups[groupKey];
+            var papers = Object.keys(group.papers);
+            if (papers.length < 2) return;
+            papers.sort(function (a, b) { return a.localeCompare(b, 'zh-HK'); });
+            hitGroups.push({
+                examination: group.examination,
+                yearKey: group.yearKey,
+                papers: papers,
+                ids: group.ids.slice()
+            });
+            group.ids.forEach(function (id) {
+                if (id && id !== '(無編號)' && excepted[id]) {
+                    if (!seenExc[id]) {
+                        seenExc[id] = true;
+                        exceptions.push(id);
+                    }
+                    return;
+                }
+                var key = id || '(無編號)';
+                if (!seenNeed[key]) {
+                    seenNeed[key] = true;
+                    needs.push(key);
+                }
+            });
+        });
+
+        hitGroups.sort(function (a, b) {
+            var ae = a.examination || '';
+            var be = b.examination || '';
+            if (ae !== be) return ae.localeCompare(be, 'zh-HK');
+            return String(a.yearKey || '').localeCompare(String(b.yearKey || ''), 'zh-HK');
+        });
+        sortIdsLocale(needs);
+        sortIdsLocale(exceptions);
+        return {
+            check: check,
+            mode: 'crossPaperSameYear',
+            needsHandling: needs,
+            exceptionIds: exceptions,
+            needsCount: needs.length,
+            exceptionCount: exceptions.length,
+            hitGroups: hitGroups
+        };
+    }
+
+    function evaluateCheck(questions, check) {
+        var mode = normalizeCheckMode(check && check.mode);
+        if (mode === 'crossPaperSameYear') {
+            return evaluateCrossPaperSameYearCheck(questions, check);
+        }
+        return evaluatePerQuestionCheck(questions, check);
+    }
+
+    function checkModeLabel(mode) {
+        return normalizeCheckMode(mode) === 'crossPaperSameYear'
+            ? '同年跨卷重疊'
+            : '普通檢查';
+    }
+
+    function formatHitGroupLabel(group) {
+        var exam = (group && group.examination) ? group.examination : '（無考試）';
+        var year = (group && group.yearKey) ? group.yearKey : '（無年份）';
+        var papers = (group && group.papers && group.papers.length)
+            ? group.papers.join('、')
+            : '（無卷別）';
+        return exam + ' ' + year + '（' + papers + '）';
     }
 
     function ensureButton() {
@@ -579,7 +710,7 @@
             + '  <header class="data-checks-header">'
             + '    <div>'
             + '      <h2 id="data-checks-title">資料檢查</h2>'
-            + '      <p class="data-checks-subtitle">列出仍需處理的題目（符合條件且不在該檢查的例外清單）。可編輯標題、條件與例外；點題號會用既有「題目 ID」篩選顯示該題；「篩選全部待處理」會一次套用整批待處理編號（不經搜尋框）。</p>'
+            + '      <p class="data-checks-subtitle">列出仍需處理的題目（符合條件且不在該檢查的例外清單）。檢查模式可選普通檢查或同年跨卷重疊；可編輯標題、條件與例外；點題號會用既有「題目 ID」篩選顯示該題；「篩選全部待處理」會一次套用整批待處理編號（不經搜尋框）。</p>'
             + '    </div>'
             + '    <button type="button" class="data-checks-close" aria-label="關閉">×</button>'
             + '  </header>'
@@ -811,6 +942,7 @@
         var check = {
             id: newCheckId(),
             name: '新檢查',
+            mode: 'perQuestion',
             conditions: [{ include: true, field: 'text', value: '', type: 'textContains' }],
             exceptions: []
         };
@@ -838,6 +970,7 @@
         var row = overlay && overlay.querySelector('[data-check-id="' + checkId + '"]');
         if (!row) return null;
         var nameInput = row.querySelector('[data-dc-name]');
+        var modeSelect = row.querySelector('[data-dc-mode]');
         var exceptionInput = row.querySelector('[data-dc-exceptions]');
         var conditionRows = row.querySelectorAll('[data-dc-cond-row]');
         var conditions = [];
@@ -859,6 +992,7 @@
         return {
             id: checkId,
             name: String(nameInput && nameInput.value || '').trim() || '未命名檢查',
+            mode: normalizeCheckMode(modeSelect && modeSelect.value),
             conditions: conditions,
             exceptions: exceptions
         };
@@ -993,12 +1127,22 @@
         var conditionsHtml = (check.conditions.length ? check.conditions : [{ type: 'textContains', value: '' }]).map(function (condition) {
             return conditionRowHtml(condition);
         }).join('');
+        var mode = normalizeCheckMode(check.mode);
+        var perSelected = mode === 'perQuestion' ? ' selected' : '';
+        var crossSelected = mode === 'crossPaperSameYear' ? ' selected' : '';
 
         return ''
             + '<div class="data-checks-editor">'
             + '  <label class="data-checks-field">'
             + '    <span>標題</span>'
             + '    <input type="text" data-dc-name value="' + escapeAttr(check.name) + '" maxlength="120">'
+            + '  </label>'
+            + '  <label class="data-checks-field">'
+            + '    <span>檢查模式</span>'
+            + '    <select data-dc-mode aria-label="檢查模式">'
+            + '      <option value="perQuestion"' + perSelected + '>普通檢查</option>'
+            + '      <option value="crossPaperSameYear"' + crossSelected + '>同年跨卷重疊</option>'
+            + '    </select>'
             + '  </label>'
             + '  <div class="data-checks-field">'
             + '    <div class="data-checks-field-head">'
@@ -1060,8 +1204,22 @@
                 } else {
                     var summary = document.createElement('p');
                     summary.className = 'data-checks-row-summary';
-                    summary.textContent = conditionSummary(check) || '（尚未設定條件）';
+                    var modeText = checkModeLabel(check.mode);
+                    var condText = conditionSummary(check) || '（尚未設定條件）';
+                    summary.textContent = modeText + ' · ' + condText;
                     row.appendChild(summary);
+
+                    if (normalizeCheckMode(check.mode) === 'crossPaperSameYear') {
+                        var hitNote = document.createElement('p');
+                        hitNote.className = 'data-checks-hit-groups';
+                        var groups = result.hitGroups || [];
+                        if (groups.length) {
+                            hitNote.textContent = '重疊年份：' + groups.map(formatHitGroupLabel).join('；');
+                        } else {
+                            hitNote.textContent = '重疊年份：目前沒有同年跨卷命中';
+                        }
+                        row.appendChild(hitNote);
+                    }
 
                     var actions = document.createElement('div');
                     actions.className = 'data-checks-row-actions';
@@ -1263,10 +1421,11 @@
             + '.data-checks-field { display: grid; gap: 6px; font-size: 13px; color: var(--text-color); }'
             + '.data-checks-field > span, .data-checks-field-head span { font-weight: 700; color: var(--primary-color); }'
             + '.data-checks-field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }'
-            + '.data-checks-field input[type="text"], .data-checks-field textarea, .data-checks-cond-row input[type="text"] {'
+            + '.data-checks-field input[type="text"], .data-checks-field textarea, .data-checks-field select, .data-checks-cond-row input[type="text"] {'
             + '  width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #d7e3ef;'
             + '  border-radius: 8px; font: inherit; color: inherit; background: #fff;'
             + '}'
+            + '.data-checks-hit-groups { margin: 6px 0 0; color: #9a3412; font-size: 13px; line-height: 1.55; font-weight: 600; }'
             + '.data-checks-field textarea { resize: vertical; min-height: 88px;'
             + '  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }'
             + '.data-checks-cond-list { display: grid; gap: 10px; }'
