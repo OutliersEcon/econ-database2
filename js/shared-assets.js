@@ -373,13 +373,90 @@ async function fetchSharedAssetDirectOrProxy(rel, timeoutMs) {
     }
 }
 
-// Publisher shards in the private data repo (Phase 2 merge-on-load).
-// Combined data/database.json remains the ONLY upload/download sync target
-// (Apps Script GITHUB_DATA_PATH → shared/data/database.json) and the load
-// fallback when shards fail. Dirty-shard upload is Phase 3 — not implemented.
+// Publisher shards in the private data repo.
+// Phase 2 load: mock merges both shards; non-mock loads HKEAA only; fallback combined.
+// Phase 3 upload: partition by exact publisher, write only dirty shards (+ combined
+// dual-write when any shard is dirty). Unknown / empty / "-" publishers are rejected.
+// Safety: never upload an empty shard over cloud (skip absent publishers entirely).
 var SHARED_BANK_COMBINED_REL = 'data/database.json';
 var SHARED_BANK_HKEAA_REL = 'data/database-hkeaa.json';
 var SHARED_BANK_ARISTO_REL = 'data/database-aristo.json';
+var SHARED_BANK_PUBLISHER_HKEAA = 'HKEAA';
+var SHARED_BANK_PUBLISHER_ARISTO = '雅集出版社';
+
+// Exact publisher → shard key. Empty / "-" / anything else → unknown (reject on upload).
+function sharedBankPublisherShardKey(publisher) {
+    var p = String(publisher == null ? '' : publisher).trim();
+    if (p === SHARED_BANK_PUBLISHER_HKEAA) return 'hkeaa';
+    if (p === SHARED_BANK_PUBLISHER_ARISTO) return 'aristo';
+    return '';
+}
+
+function sharedBankShardRelPath(key) {
+    if (key === 'hkeaa') return SHARED_BANK_HKEAA_REL;
+    if (key === 'aristo') return SHARED_BANK_ARISTO_REL;
+    if (key === 'combined') return SHARED_BANK_COMBINED_REL;
+    return '';
+}
+
+// Partition export questions by exact publisher. Prefer reject unknowns over silent mis-shard.
+function partitionQuestionsByPublisher(questions) {
+    var list = Array.isArray(questions) ? questions : [];
+    var out = {
+        hkeaa: [],
+        aristo: [],
+        unknown: []
+    };
+    for (var i = 0; i < list.length; i++) {
+        var q = list[i];
+        var key = sharedBankPublisherShardKey(q && q.publisher);
+        if (key === 'hkeaa') out.hkeaa.push(q);
+        else if (key === 'aristo') out.aristo.push(q);
+        else out.unknown.push(q);
+    }
+    return out;
+}
+
+// Fingerprint for dirty detection: sorted id set + stable JSON of questions sorted by id.
+// Id-set change catches cross-shard publisher moves; content JSON catches edits.
+function sharedBankShardFingerprint(questions) {
+    var list = Array.isArray(questions) ? questions.slice() : [];
+    list.sort(function (a, b) {
+        return String(a && a.id || '').localeCompare(String(b && b.id || ''));
+    });
+    var ids = [];
+    for (var i = 0; i < list.length; i++) {
+        ids.push(String(list[i] && list[i].id || ''));
+    }
+    return {
+        count: list.length,
+        idsKey: ids.join('\n'),
+        contentKey: JSON.stringify(list)
+    };
+}
+
+function sharedBankFingerprintsEqual(a, b) {
+    if (!a || !b) return false;
+    return a.count === b.count
+        && a.idsKey === b.idsKey
+        && a.contentKey === b.contentKey;
+}
+
+function buildShardExportPayload(baseExport, questions) {
+    var base = (baseExport && typeof baseExport === 'object' && !Array.isArray(baseExport))
+        ? Object.assign({}, baseExport)
+        : {};
+    var qs = Array.isArray(questions) ? questions : [];
+    base.questions = qs;
+    base.questionCount = qs.length;
+    base.exportDate = new Date().toISOString();
+    if (typeof stampSchemaVersion === 'function') {
+        stampSchemaVersion(base);
+    } else if (typeof SCHEMA_VERSION === 'number') {
+        base.schemaVersion = SCHEMA_VERSION;
+    }
+    return base;
+}
 
 function sharedBankHasMockAccess() {
     if (sharedReadSession && sharedReadSession.mockTests === true) return true;

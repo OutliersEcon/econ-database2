@@ -26,7 +26,10 @@ var GIT_ERROR_TEXT = {
     schema_too_new: '共用題庫是由較新版本寫入的，請先更新網頁再上傳',
     schema_version_stale: '共用題庫是由較新版本寫入的，請先更新網頁再上傳',
     schema_unreadable: '無法安全載入較新格式的題庫，請先更新網頁',
-    validation_failed: '上傳已拒絕：題目欄位驗證失敗'
+    validation_failed: '上傳已拒絕：題目欄位驗證失敗',
+    unknown_publisher: '上傳已拒絕：有題目的出版社不是 HKEAA 或 雅集出版社',
+    empty_shard_refused: '上傳已拒絕：不可覆寫空白分片（請確認 wipe）',
+    nothing_to_upload: '題庫與雲端相同，無需上傳'
 };
 
 function gitProxyUrl() {
@@ -73,6 +76,14 @@ function gitFailureText(error) {
         var detail = error.message ? String(error.message).trim() : '';
         if (detail) return detail.length > 420 ? detail.slice(0, 419) + '…' : detail;
         return GIT_ERROR_TEXT.validation_failed;
+    }
+    if (error && error.code === 'unknown_publisher') {
+        var unk = error.message ? String(error.message).trim() : '';
+        if (unk) return unk.length > 420 ? unk.slice(0, 419) + '…' : unk;
+        return GIT_ERROR_TEXT.unknown_publisher;
+    }
+    if (error && error.code === 'empty_shard_refused') {
+        return error.message || GIT_ERROR_TEXT.empty_shard_refused;
     }
     if (error && error.code && GIT_ERROR_TEXT[error.code]) return GIT_ERROR_TEXT[error.code];
     var message = error && error.message ? String(error.message) : '';
@@ -273,8 +284,27 @@ function formatGitHubUploadLogTime(date) {
     }
 }
 
-// Uploads the full IndexedDB bank to Apps Script syncDataUpload →
-// combined shared/data/database.json only (no publisher shard write).
+// Phase 3 dirty-shard upload:
+// 1) Partition IndexedDB by exact publisher (HKEAA / 雅集出版社); reject unknowns.
+// 2) Compare fingerprints (sorted ids + content) vs cloud shards; write only dirty.
+// 3) Safety: if local has zero rows for a publisher, skip that shard entirely
+//    (never upload an empty shard over cloud — protects non-mock HKEAA-only IndexedDB).
+// 4) When any shard is dirty, also dual-write combined database.json as
+//    (local present shards) ∪ (cloud shards for absent local publishers).
+async function peekCloudShardPayload(rel) {
+    if (typeof fetchSharedJsonDirectOrProxy !== 'function') return null;
+    try {
+        var direct = await fetchSharedJsonDirectOrProxy(rel, 180000);
+        if (direct && direct.data) return direct.data;
+    } catch (err) {
+        var code = err && err.code ? String(err.code) : '';
+        if (code === 'github_not_found') return null;
+        // Missing shard or read failure → treat as absent (force dirty if local present).
+        console.warn('[GitHub upload] peek shard failed for ' + rel + ': ' + code);
+    }
+    return null;
+}
+
 async function uploadQuestionsToGit(options) {
     options = options || {};
     if (!gitSyncState.allowed) {
@@ -292,9 +322,9 @@ async function uploadQuestionsToGit(options) {
         setGitStatus(options.auto ? '正在自動同步到 GitHub…' : '正在上傳到 GitHub…', '');
         try {
             setGitStatus('正在檢查共用題庫版本…', '');
-            var cloudPayload = await peekCloudQuestionBankForSchema();
+            var cloudCombined = await peekCloudQuestionBankForSchema();
             if (typeof assertCanUploadOverCloud === 'function') {
-                assertCanUploadOverCloud(cloudPayload);
+                assertCanUploadOverCloud(cloudCombined);
             }
             setGitStatus(options.auto ? '正在自動同步到 GitHub…' : '正在上傳到 GitHub…', '');
             var exportData = typeof buildQuestionExport === 'function'
@@ -306,10 +336,122 @@ async function uploadQuestionsToGit(options) {
             if (typeof stampSchemaVersion === 'function') {
                 stampSchemaVersion(exportData);
             }
+
+            if (typeof partitionQuestionsByPublisher !== 'function') {
+                throw Object.assign(new Error('bad_request'), { code: 'bad_request' });
+            }
+            var parts = partitionQuestionsByPublisher(exportData.questions);
+            if (parts.unknown && parts.unknown.length) {
+                var sample = parts.unknown.slice(0, 5).map(function (q) {
+                    return String(q && q.id || '?') + '=' + JSON.stringify(q && q.publisher);
+                }).join(', ');
+                var unkMsg = '上傳已拒絕：有 '
+                    + parts.unknown.length
+                    + ' 題的 publisher 不是「HKEAA」或「雅集出版社」（空／-／未知不允許靜默寫入分片）。例：'
+                    + sample;
+                throw Object.assign(new Error(unkMsg), { code: 'unknown_publisher', message: unkMsg });
+            }
+
+            setGitStatus('正在比對雲端分片…', '');
+            var cloudHkeaa = await peekCloudShardPayload(
+                typeof SHARED_BANK_HKEAA_REL === 'string' ? SHARED_BANK_HKEAA_REL : 'data/database-hkeaa.json'
+            );
+            var cloudAristo = await peekCloudShardPayload(
+                typeof SHARED_BANK_ARISTO_REL === 'string' ? SHARED_BANK_ARISTO_REL : 'data/database-aristo.json'
+            );
+
+            function questionsOf(payload) {
+                if (typeof sharedBankQuestionsFromPayload === 'function') {
+                    return sharedBankQuestionsFromPayload(payload) || [];
+                }
+                if (payload && Array.isArray(payload.questions)) return payload.questions;
+                return [];
+            }
+
+            var localHkeaa = parts.hkeaa;
+            var localAristo = parts.aristo;
+            // Safety: never treat a missing local publisher as an empty dirty wipe.
+            var hkeaaPresent = localHkeaa.length > 0;
+            var aristoPresent = localAristo.length > 0;
+
+            var fp = typeof sharedBankShardFingerprint === 'function'
+                ? sharedBankShardFingerprint
+                : function (qs) { return { count: (qs || []).length, idsKey: '', contentKey: JSON.stringify(qs || []) }; };
+            var fpEq = typeof sharedBankFingerprintsEqual === 'function'
+                ? sharedBankFingerprintsEqual
+                : function (a, b) { return a && b && a.contentKey === b.contentKey; };
+
+            var hkeaaDirty = false;
+            var aristoDirty = false;
+            if (hkeaaPresent) {
+                var cloudHkeaaQs = questionsOf(cloudHkeaa);
+                hkeaaDirty = !cloudHkeaa || !fpEq(fp(localHkeaa), fp(cloudHkeaaQs));
+            }
+            if (aristoPresent) {
+                var cloudAristoQs = questionsOf(cloudAristo);
+                aristoDirty = !cloudAristo || !fpEq(fp(localAristo), fp(cloudAristoQs));
+            }
+
+            if (!hkeaaDirty && !aristoDirty) {
+                var noopMsg = '題庫分片與雲端相同，無需上傳'
+                    + '（HKEAA '
+                    + localHkeaa.length
+                    + '／雅集 '
+                    + localAristo.length
+                    + (hkeaaPresent ? '' : '；本機無 HKEAA，已跳過該分片')
+                    + (aristoPresent ? '' : '；本機無雅集，已跳過該分片')
+                    + '）';
+                console.log('[GitHub upload] ' + formatGitHubUploadLogTime(new Date()) + ' noop: ' + noopMsg);
+                setGitStatus(noopMsg, 'ok');
+                if (typeof showNotification === 'function') showNotification(noopMsg, 'success');
+                return;
+            }
+
+            var buildPayload = typeof buildShardExportPayload === 'function'
+                ? buildShardExportPayload
+                : function (base, qs) {
+                    var o = Object.assign({}, base || {});
+                    o.questions = qs;
+                    o.questionCount = qs.length;
+                    o.exportDate = new Date().toISOString();
+                    return o;
+                };
+
+            var files = [];
+            if (hkeaaDirty) {
+                files.push({
+                    path: typeof SHARED_BANK_HKEAA_REL === 'string' ? SHARED_BANK_HKEAA_REL : 'data/database-hkeaa.json',
+                    data: buildPayload(exportData, localHkeaa)
+                });
+            }
+            if (aristoDirty) {
+                files.push({
+                    path: typeof SHARED_BANK_ARISTO_REL === 'string' ? SHARED_BANK_ARISTO_REL : 'data/database-aristo.json',
+                    data: buildPayload(exportData, localAristo)
+                });
+            }
+
+            // Combined dual-write: local present shards + cloud shards for absent locals.
+            var combinedQs = [];
+            if (hkeaaPresent) combinedQs = combinedQs.concat(localHkeaa);
+            else combinedQs = combinedQs.concat(questionsOf(cloudHkeaa));
+            if (aristoPresent) combinedQs = combinedQs.concat(localAristo);
+            else combinedQs = combinedQs.concat(questionsOf(cloudAristo));
+            files.push({
+                path: typeof SHARED_BANK_COMBINED_REL === 'string' ? SHARED_BANK_COMBINED_REL : 'data/database.json',
+                data: buildPayload(exportData, combinedQs)
+            });
+
+            setGitStatus('正在上傳髒分片（'
+                + (hkeaaDirty ? 'HKEAA ' + localHkeaa.length : '')
+                + (hkeaaDirty && aristoDirty ? ' + ' : '')
+                + (aristoDirty ? '雅集 ' + localAristo.length : '')
+                + '）…', '');
+
             var data = await gitProxyRequest({
                 action: 'syncDataUpload',
                 username: gitUsername(),
-                data: exportData
+                files: files
             }, 180000);
             if (!data || data.ok !== true) {
                 var failed = new Error((data && (data.message || data.error)) || 'github_error');
@@ -328,12 +470,23 @@ async function uploadQuestionsToGit(options) {
                 }
                 throw failed;
             }
-            var count = exportData.questionCount;
+            var count = combinedQs.length;
             var writtenSchema = (typeof data.schemaVersion === 'number')
                 ? data.schemaVersion
                 : (typeof readSchemaVersion === 'function' ? readSchemaVersion(exportData) : 0);
-            console.log('[GitHub upload] ' + formatGitHubUploadLogTime(new Date()) + ' succeeded (' + count + ' questions)');
-            var message = '已上傳 ' + count + ' 題到 GitHub';
+            var writtenPaths = Array.isArray(data.written)
+                ? data.written.map(function (w) { return w && w.path ? String(w.path) : ''; }).filter(Boolean)
+                : [];
+            console.log('[GitHub upload] ' + formatGitHubUploadLogTime(new Date())
+                + ' succeeded (' + count + ' combined; dirty hkeaa=' + hkeaaDirty
+                + ' aristo=' + aristoDirty + '; wrote ' + writtenPaths.join(', ') + ')');
+            var message = '已上傳髒分片到 GitHub（合併 '
+                + count + ' 題'
+                + (hkeaaDirty ? '；HKEAA ' + localHkeaa.length : '')
+                + (aristoDirty ? '；雅集 ' + localAristo.length : '')
+                + (!aristoPresent ? '；本機無雅集→未動 aristo 分片' : '')
+                + (!hkeaaPresent ? '；本機無 HKEAA→未動 hkeaa 分片' : '')
+                + '）';
             if (writtenSchema > 0) message += '（格式版本 ' + writtenSchema + '）';
             setGitStatus(message, 'ok');
             if (typeof showNotification === 'function') showNotification(message, 'success');
