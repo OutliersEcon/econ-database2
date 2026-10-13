@@ -271,3 +271,15 @@ function debounce(fn, delay = 250) {
         timer = setTimeout(() => fn.apply(this, args), delay);
     };
 }
+
+// Whether overlay/backdrop click should dismiss a modal.
+// Reads UserSettings.ui.closeOnBackdropClick (default ON). Escape / × / 關閉 always close.
+function shouldCloseOnBackdropClick() {
+    try {
+        if (window.UserSettings && typeof UserSettings.get === 'function') {
+            var s = UserSettings.get();
+            if (s && s.ui && s.ui.closeOnBackdropClick === false) return false;
+        }
+    } catch (e) { /* keep default */ }
+    return true;
+}

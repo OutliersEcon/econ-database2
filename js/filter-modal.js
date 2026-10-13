@@ -119,7 +119,7 @@ function openFilterModal(key) {
         </div>`;
 
     overlay.addEventListener('click', e => {
-        if (e.target === overlay) closeFilterModal();
+        if (e.target === overlay && shouldCloseOnBackdropClick()) closeFilterModal();
     });
     document.body.appendChild(overlay);
     document.body.classList.add('mf-modal-open');
@@ -196,7 +196,7 @@ function openChapterFilterModal() {
         </div>`;
 
     overlay.addEventListener('click', e => {
-        if (e.target === overlay) closeFilterModal();
+        if (e.target === overlay && shouldCloseOnBackdropClick()) closeFilterModal();
     });
     document.body.appendChild(overlay);
     document.body.classList.add('mf-modal-open');

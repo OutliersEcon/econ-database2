@@ -88,7 +88,7 @@
         Poe.poeUi.settingsOverlay = overlay;
 
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) Poe.closeSettingsModal();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) Poe.closeSettingsModal();
         });
         overlay.querySelector('#poe-settings-close').addEventListener('click', Poe.closeSettingsModal);
         overlay.querySelector('#poe-settings-done').addEventListener('click', Poe.closeSettingsModal);
@@ -269,7 +269,7 @@
         Poe.poeUi.overlay = overlay;
 
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) Poe.closePoeGenerateModal();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) Poe.closePoeGenerateModal();
         });
         overlay.querySelector('.poe-close').addEventListener('click', Poe.closePoeGenerateModal);
         overlay.querySelector('#poe-start').addEventListener('click', Poe.generateFromCurrentSource);

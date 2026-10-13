@@ -645,7 +645,7 @@
             + '</div>';
         document.body.appendChild(overlay);
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) Poe.closeEnlargeOverlay();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) Poe.closeEnlargeOverlay();
         });
         overlay.querySelector('#poe-enlarge-restore').addEventListener('click', Poe.closeEnlargeOverlay);
         overlay.querySelector('#poe-enlarge-close').addEventListener('click', Poe.closeEnlargeOverlay);
