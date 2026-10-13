@@ -4,7 +4,7 @@
 // Shape (settings.schemaVersion, independent of bank SCHEMA_VERSION):
 //   display: fontSize / density / lang / questionsExpandedByDefault
 //   list: pageSize / sort
-//   filters: excludeOutSyl / rememberLast / searchScope  (NOT idSet / live tri-state)
+//   filters: excludeOutSyl / rememberLast / searchScope / copyIncludeQuestionId  (NOT idSet / live tri-state)
 //   stats: mode / dimensions / metrics / crosstab / detailPrefs
 //   ai: defaultModel / provider / explainStyle / showQuickPrompts  (no API keys)
 //   ui: defaultTab
@@ -40,7 +40,7 @@
             updatedAt: '',
             display: { fontSize: 'medium', density: 'standard', lang: 'both', questionsExpandedByDefault: false },
             list: { pageSize: 20, sort: 'default' },
-            filters: { excludeOutSyl: true, rememberLast: true, searchScope: 'all' },
+            filters: { excludeOutSyl: true, rememberLast: true, searchScope: 'all', copyIncludeQuestionId: false },
             stats: {
                 mode: 'browse',
                 dimensions: ['topics'],
@@ -204,6 +204,8 @@
         if (!allowedSort[base.list.sort]) base.list.sort = 'default';
         base.filters.excludeOutSyl = base.filters.excludeOutSyl !== false;
         base.filters.rememberLast = base.filters.rememberLast !== false;
+        // Opt-in: 複製篩選題目 prepends question id (default off).
+        base.filters.copyIncludeQuestionId = base.filters.copyIncludeQuestionId === true;
         if (typeof base.filters.searchScope !== 'string' || !base.filters.searchScope) {
             base.filters.searchScope = 'all';
         }
@@ -664,6 +666,7 @@
         setVal('us-sort', s.list.sort);
         setCheck('us-exclude-out-syl', s.filters.excludeOutSyl);
         setCheck('us-remember-last', s.filters.rememberLast);
+        setCheck('us-copy-include-qid', s.filters.copyIncludeQuestionId === true);
         setVal('us-search-scope', s.filters.searchScope || 'all');
         setVal('us-stats-mode', s.stats.mode);
         setVal('us-stats-dimension', (s.stats.dimensions && s.stats.dimensions[0]) || 'topics');
@@ -730,6 +733,7 @@
             s.list.sort = val('us-sort') || 'default';
             s.filters.excludeOutSyl = chk('us-exclude-out-syl');
             s.filters.rememberLast = chk('us-remember-last');
+            s.filters.copyIncludeQuestionId = chk('us-copy-include-qid');
             s.filters.searchScope = val('us-search-scope') || 'all';
             s.stats.mode = val('us-stats-mode') === 'crosstab' ? 'crosstab' : 'browse';
             s.stats.dimensions = [val('us-stats-dimension') || 'topics'];
@@ -827,7 +831,8 @@
             + '            <option value="answer">答案</option>'
             + '            <option value="markersReport">評卷報告</option>'
             + '          </select></label>'
-            + '          <p class="user-settings-note">不會儲存即時 idSet／進階篩選內容。</p>'
+            + '          <label class="user-settings-check"><input type="checkbox" id="us-copy-include-qid"> 「複製篩選題目」時在每題前加上題目 ID</label>'
+            + '          <p class="user-settings-note">開啟後格式如：先一行 DSE-2025-P1-08，再題幹與「答案：」。不會儲存即時 idSet／進階篩選內容。</p>'
             + '        </div>'
             + '        <div class="user-settings-section">'
             + '          <h4 class="user-settings-subhead">統計</h4>'

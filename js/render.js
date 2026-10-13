@@ -533,10 +533,21 @@ async function copyFilteredQuestions() {
         if (!ok) return;
     }
 
+    let includeQuestionId = false;
+    try {
+        if (window.UserSettings && typeof window.UserSettings.get === 'function') {
+            const filt = window.UserSettings.get().filters;
+            includeQuestionId = !!(filt && filt.copyIncludeQuestionId);
+        }
+    } catch (e) { /* settings not ready */ }
+
     const text = questions.map(q => {
         const question = (q.plainText || q.questionTextChi || '').trim();
         // Label answers so AI出題 paste parsing can split stem vs answer.
-        return `${question}\n答案：\n${answerTextForCopy(q)}`;
+        const body = `${question}\n答案：\n${answerTextForCopy(q)}`;
+        if (!includeQuestionId) return body;
+        const id = (q && q.id != null) ? String(q.id).trim() : '';
+        return id ? `${id}\n${body}` : body;
     }).join('\n\n');
 
     copyToClipboard(text, button);
