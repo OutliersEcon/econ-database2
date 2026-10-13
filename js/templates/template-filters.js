@@ -37,30 +37,47 @@ function renderFiltersTemplate() {
         </div>`;
 
     return `
-    <div class="filters-container">
+    <div class="filters-container" role="search" aria-label="題目篩選">
 
-        <!-- Row 1: Search bar with scope selector -->
-        <div class="search-row">
+        <div class="filter-panel-heading">
+            <h2 class="filter-panel-title">篩選</h2>
+            <p class="filter-panel-lead">以快速搜尋、基本篩選條件或進階篩選縮小題目列表；三者可並用，行為與先前相同。</p>
+        </div>
+
+        <!-- 快速搜尋：scope is explicit -->
+        <section class="filter-section search-row" aria-labelledby="quick-search-heading">
+            <div class="filter-section-head">
+                <h3 id="quick-search-heading" class="filter-section-title">快速搜尋</h3>
+                <p class="filter-section-hint">只搜尋左側「搜尋範圍」所選的欄位。</p>
+            </div>
             <div class="search-input-group">
                 <div class="scope-select-wrapper">
-                    <select id="search-scope">
+                    <label for="search-scope" class="scope-select-label">搜尋範圍</label>
+                    <select id="search-scope" aria-label="搜尋範圍">
                         <option value="all">全部欄位</option>
                     </select>
                 </div>
-                <input type="text" id="search" placeholder="搜尋題目 ID、內容、答案...">
-                <span class="search-icon">🔍</span>
+                <input type="text" id="search" placeholder="輸入關鍵字（題目 ID、內容、答案…）" aria-label="快速搜尋關鍵字">
+                <span class="search-icon" aria-hidden="true">🔍</span>
             </div>
-        </div>
+        </section>
 
-        <!-- Row 2: Panel toggle + reset -->
-        <div class="btn-group">
-            <button id="toggle-filters-btn" class="btn btn-secondary btn-sm" onclick="toggleFiltersPanel()">▶️ 顯示篩選條件</button>
-            <button type="button" id="advanced-filter-btn" class="btn btn-outline-primary btn-sm" onclick="openAdvancedFilterModal()">進階篩選</button>
-            <button class="btn btn-clear-filter btn-sm" onclick="clearFilters()">🔄 重置篩選條件</button>
-        </div>
+        <!-- 基本／進階 entry points under one filter IA -->
+        <section class="filter-section filter-entry-row" aria-labelledby="filter-conditions-heading">
+            <div class="filter-section-head">
+                <h3 id="filter-conditions-heading" class="filter-section-title">篩選條件</h3>
+                <p class="filter-section-hint">基本篩選為常用下拉與範圍；進階篩選以欄位條件組合（全部 AND）。</p>
+            </div>
+            <div class="btn-group filter-entry-actions">
+                <button type="button" id="toggle-filters-btn" class="btn btn-secondary btn-sm" onclick="toggleFiltersPanel()" aria-expanded="false" aria-controls="collapsible-filters-wrapper">▶️ 顯示篩選條件</button>
+                <button type="button" id="advanced-filter-btn" class="btn btn-outline-primary btn-sm" onclick="openAdvancedFilterModal()">進階篩選</button>
+                <button type="button" class="btn btn-clear-filter btn-sm" onclick="clearFilters()">🔄 重置篩選條件</button>
+            </div>
+        </section>
 
-        <!-- Collapsible filter grid -->
-        <div id="collapsible-filters-wrapper" style="max-height: 0px; opacity: 0; overflow: hidden; transition: all 0.3s ease; margin-top: 0;">
+        <!-- Collapsible basic filter grid -->
+        <div id="collapsible-filters-wrapper" class="filter-basic-panel" style="max-height: 0px; opacity: 0; overflow: hidden; transition: all 0.3s ease; margin-top: 0;">
+            <div class="filter-basic-panel-label">基本篩選</div>
             <div class="filter-primary-grid">
 
                 <!-- 🏢 出版商 -->

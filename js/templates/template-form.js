@@ -3,6 +3,7 @@
 // Dependencies: None (pure HTML string generator).
 // Note: the curriculum checkbox helper container is "curriculum-form-options"
 // (renamed from the old duplicate ID "curriculum-options" which clashed with the filter dropdown).
+// Fields are grouped into 基本／內容／分題／分類／圖表 — IDs and save semantics unchanged.
 
 function renderFormTemplate() {
     return `
@@ -10,186 +11,198 @@ function renderFormTemplate() {
         <h2 id="form-title">新增題目</h2>
         <form id="question-form">
 
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="question-id">題目 ID *</label>
-                    <input type="text" id="question-id" required>
-                </div>
-                <div class="form-group">
-                    <label for="publisher">出版商</label>
-                    <input type="text" id="publisher" value="HKEAA">
-                </div>
-                <div class="form-group">
-                    <label for="examination">考試類型 *</label>
-                    <select id="examination" required>
-                        <option value="HKDSE">HKDSE</option>
-                        <option value="HKCEE">HKCEE</option>
-                        <option value="HKALE">HKALE</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="year">年份 *</label>
-                    <!-- Text: 4-digit calendar years, PP/SP, or mock MT## (bare 27–44 auto-normalize to MT## on save). -->
-                    <input type="text" id="year" required placeholder="2016 / PP / MT39">
-                </div>
-                <div class="form-group">
-                    <label for="paper">試卷</label>
-                    <input type="text" id="paper">
-                </div>
-                <div class="form-group">
-                    <label for="question-type">題目類型 *</label>
-                    <select id="question-type" required>
-                        <option value="MC">MC</option>
-                        <option value="文字題 (SQ/LQ)">文字題 (SQ/LQ)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="marks">分數</label>
-                    <input type="number" id="marks" min="0" step="0.5">
-                    <small style="display:block;margin-top:4px;color:var(--text-light);font-size:12px;">總分以本欄為準；有分題時各分分數合計必須等於總分（不會自動加總覆寫）。</small>
-                </div>
-                <div class="form-group">
-                    <label for="section">Section</label>
-                    <input type="text" id="section" placeholder="A / B / C / -">
-                </div>
-                <div class="form-group">
-                    <label for="question-number">題號</label>
-                    <input type="text" id="question-number">
-                </div>
-            </div>
-
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="question-text-chi">題目內容 (中文)</label>
-                    <textarea id="question-text-chi"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="question-text-eng">題目內容 (英文)</label>
-                    <textarea id="question-text-eng"></textarea>
-                </div>
-            </div>
-
-            <div class="form-group" style="grid-column: 1 / -1;">
-                <label>分題分數／表現</label>
-                <p style="margin:0 0 8px;color:var(--text-light);font-size:12px;line-height:1.45;">
-                    用於 SQ/LQ 分題。請先選擇狀態：<strong>尚未輸入</strong>（未確認）、<strong>沒有分題</strong>（確認無分題）、或<strong>有分題</strong>（填寫各分）。有分題時每一分都必須有分數，且合計須等於上方「分數」總分。
-                </p>
-                <div class="parts-status-group" role="radiogroup" aria-label="分題狀態" style="display:flex;flex-wrap:wrap;gap:12px 18px;margin-bottom:10px;">
-                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="radio" name="parts-status" value="pending" checked onchange="onPartsStatusChange()"> 尚未輸入
-                    </label>
-                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="radio" name="parts-status" value="none" onchange="onPartsStatusChange()"> 沒有分題
-                    </label>
-                    <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="radio" name="parts-status" value="filled" onchange="onPartsStatusChange()"> 有分題
-                    </label>
-                </div>
-                <div id="question-parts-editor">
-                    <div id="question-parts-list" class="question-parts-list"></div>
-                    <button type="button" class="btn btn-outline-primary btn-sm" id="question-parts-add" onclick="addQuestionPartRow()">＋ 新增分題</button>
-                </div>
-            </div>
-
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="multiple-selection-type">複選類型</label>
-                    <input type="text" id="multiple-selection-type">
-                </div>
-                <div class="form-group">
-                    <label for="graph-type">圖表類型</label>
-                    <input type="text" id="graph-type">
-                </div>
-                <div class="form-group">
-                    <label for="table-type">表格類型</label>
-                    <input type="text" id="table-type">
-                </div>
-                <div class="form-group">
-                    <label for="calculation-type">計算類型</label>
-                    <input type="text" id="calculation-type">
-                </div>
-                <div class="form-group">
-                    <label for="answer-mc">答案 (MC)</label>
-                    <input type="text" id="answer-mc">
-                </div>
-                <div class="form-group">
-                    <label for="correct-percentage">答對率 (%)</label>
-                    <input type="number" id="correct-percentage" min="0" max="100" step="0.1">
-                </div>
-            </div>
-
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="answer-chi">答案</label>
-                    <textarea id="answer-chi"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="answer-eng">Answer</label>
-                    <textarea id="answer-eng"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="markers-report-chi">評卷報告</label>
-                    <textarea id="markers-report-chi"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="markers-report-eng">Markers Report</label>
-                    <textarea id="markers-report-eng"></textarea>
-                </div>
-            </div>
-
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="curriculum-classification">課程分類</label>
-                    <input type="text" id="curriculum-classification" placeholder="選擇課程分類...">
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCurriculumFormOptions()">📚 選擇課程分類</button>
-                    <div id="curriculum-form-options" class="hidden" style="border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; max-height: 200px; overflow-y: auto;">
-                        <div class="options-list" style="display: flex; flex-direction: column; gap: 6px;"></div>
+            <details class="form-fieldset" open>
+                <summary class="form-fieldset-summary">基本</summary>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="question-id">題目 ID *</label>
+                        <input type="text" id="question-id" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="publisher">出版商</label>
+                        <input type="text" id="publisher" value="HKEAA">
+                    </div>
+                    <div class="form-group">
+                        <label for="examination">考試類型 *</label>
+                        <select id="examination" required>
+                            <option value="HKDSE">HKDSE</option>
+                            <option value="HKCEE">HKCEE</option>
+                            <option value="HKALE">HKALE</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="year">年份 *</label>
+                        <!-- Text: 4-digit calendar years, PP/SP, or mock MT## (bare 27–44 auto-normalize to MT## on save). -->
+                        <input type="text" id="year" required placeholder="2016 / PP / MT39">
+                    </div>
+                    <div class="form-group">
+                        <label for="paper">試卷</label>
+                        <input type="text" id="paper">
+                    </div>
+                    <div class="form-group">
+                        <label for="question-type">題目類型 *</label>
+                        <select id="question-type" required>
+                            <option value="MC">MC</option>
+                            <option value="文字題 (SQ/LQ)">文字題 (SQ/LQ)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="marks">分數</label>
+                        <input type="number" id="marks" min="0" step="0.5">
+                        <small style="display:block;margin-top:4px;color:var(--text-light);font-size:12px;">總分以本欄為準；有分題時各分分數合計必須等於總分（不會自動加總覆寫）。</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="section">Section</label>
+                        <input type="text" id="section" placeholder="A / B / C / -">
+                    </div>
+                    <div class="form-group">
+                        <label for="question-number">題號</label>
+                        <input type="text" id="question-number">
                     </div>
                 </div>
-                <div class="form-group">
-                    <label for="chapter-classification">Aristo Chapters (用逗號分隔)</label>
-                    <input type="text" id="chapter-classification" placeholder="Ch01, Ch02, ...">
-                    <div id="chapter-classification-badges" class="form-tag-badges" aria-live="polite"></div>
+            </details>
+
+            <details class="form-fieldset" open>
+                <summary class="form-fieldset-summary">內容</summary>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="question-text-chi">題目內容 (中文)</label>
+                        <textarea id="question-text-chi"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="question-text-eng">題目內容 (英文)</label>
+                        <textarea id="question-text-eng"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="answer-mc">答案 (MC)</label>
+                        <input type="text" id="answer-mc">
+                    </div>
+                    <div class="form-group">
+                        <label for="correct-percentage">答對率 (%)</label>
+                        <input type="number" id="correct-percentage" min="0" max="100" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="answer-chi">答案</label>
+                        <textarea id="answer-chi"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="answer-eng">Answer</label>
+                        <textarea id="answer-eng"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="markers-report-chi">評卷報告</label>
+                        <textarea id="markers-report-chi"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="markers-report-eng">Markers Report</label>
+                        <textarea id="markers-report-eng"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="option-design">選項設計</label>
+                        <input type="text" id="option-design">
+                    </div>
+                    <div class="form-group">
+                        <label for="remarks">備註</label>
+                        <textarea id="remarks"></textarea>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="concepts">涉及概念 (標籤，用逗號分隔)</label>
-                    <input type="text" id="concepts">
-                    <div id="concepts-badges" class="form-tag-badges" aria-live="polite"></div>
-                </div>
-                <div class="form-group">
-                    <label for="patterns">題型標籤 (用逗號分隔)</label>
-                    <input type="text" id="patterns">
-                    <div id="patterns-badges" class="form-tag-badges" aria-live="polite"></div>
-                </div>
-                <div class="form-group">
-                    <label for="stemPatterns">題幹模式 (用逗號分隔)</label>
-                    <input type="text" id="stemPatterns">
-                    <div id="stemPatterns-badges" class="form-tag-badges" aria-live="polite"></div>
-                </div>
-                <div class="form-group">
-                    <label for="option-design">選項設計</label>
-                    <input type="text" id="option-design">
-                </div>
+            </details>
+
+            <details class="form-fieldset" open>
+                <summary class="form-fieldset-summary">分題</summary>
                 <div class="form-group" style="grid-column: 1 / -1;">
-                    <label for="inline-diagrams">內嵌圖 (inlineDiagrams)</label>
+                    <label>分題分數／表現</label>
                     <p style="margin:0 0 8px;color:var(--text-light);font-size:12px;line-height:1.45;">
-                        路徑寫入共用資料庫 <code>shared/diagrams/</code>（欄位值形如 <code>diagrams/檔名.jpg</code>，多個以逗號分隔）。可預覽、上載新檔，或以 AI 讀圖產生描述（經確認後寫入備註，不會改題幹）。
-                        <span id="inline-diagrams-rights-hint"></span>
+                        用於 SQ/LQ 分題。請先選擇狀態：<strong>尚未輸入</strong>（未確認）、<strong>沒有分題</strong>（確認無分題）、或<strong>有分題</strong>（填寫各分）。有分題時每一分都必須有分數，且合計須等於上方「分數」總分。
                     </p>
-                    <div id="inline-diagrams-preview" class="inline-diagrams-preview" aria-live="polite"></div>
-                    <div class="inline-diagrams-controls" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0;">
-                        <input type="file" id="inline-diagrams-file" accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml,.jpg,.jpeg,.png,.gif,.webp,.svg">
-                        <button type="button" class="btn btn-outline-primary btn-sm" id="inline-diagrams-upload" hidden>上載並加入</button>
-                        <button type="button" class="btn btn-outline-primary btn-sm" id="inline-diagrams-describe-local" hidden>AI 描述本機檔</button>
+                    <div class="parts-status-group" role="radiogroup" aria-label="分題狀態" style="display:flex;flex-wrap:wrap;gap:12px 18px;margin-bottom:10px;">
+                        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                            <input type="radio" name="parts-status" value="pending" checked onchange="onPartsStatusChange()"> 尚未輸入
+                        </label>
+                        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                            <input type="radio" name="parts-status" value="none" onchange="onPartsStatusChange()"> 沒有分題
+                        </label>
+                        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                            <input type="radio" name="parts-status" value="filled" onchange="onPartsStatusChange()"> 有分題
+                        </label>
                     </div>
-                    <input type="text" id="inline-diagrams" placeholder="diagrams/example.jpg, diagrams/other.png" autocomplete="off">
-                    <p id="inline-diagrams-status" class="inline-diagrams-status" style="margin:6px 0 0;font-size:12px;color:var(--text-light);" aria-live="polite"></p>
+                    <div id="question-parts-editor">
+                        <div id="question-parts-list" class="question-parts-list"></div>
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="question-parts-add" onclick="addQuestionPartRow()">＋ 新增分題</button>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="remarks">備註</label>
-                    <textarea id="remarks"></textarea>
+            </details>
+
+            <details class="form-fieldset" open>
+                <summary class="form-fieldset-summary">分類</summary>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="curriculum-classification">課程分類</label>
+                        <input type="text" id="curriculum-classification" placeholder="選擇課程分類...">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleCurriculumFormOptions()">📚 選擇課程分類</button>
+                        <div id="curriculum-form-options" class="hidden" style="border: 1px solid var(--border-light); border-radius: 8px; padding: 10px; max-height: 200px; overflow-y: auto;">
+                            <div class="options-list" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="chapter-classification">Aristo Chapters (用逗號分隔)</label>
+                        <input type="text" id="chapter-classification" placeholder="Ch01, Ch02, ...">
+                        <div id="chapter-classification-badges" class="form-tag-badges" aria-live="polite"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="concepts">涉及概念 (標籤，用逗號分隔)</label>
+                        <input type="text" id="concepts">
+                        <div id="concepts-badges" class="form-tag-badges" aria-live="polite"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="patterns">題型標籤 (用逗號分隔)</label>
+                        <input type="text" id="patterns">
+                        <div id="patterns-badges" class="form-tag-badges" aria-live="polite"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="stemPatterns">題幹模式 (用逗號分隔)</label>
+                        <input type="text" id="stemPatterns">
+                        <div id="stemPatterns-badges" class="form-tag-badges" aria-live="polite"></div>
+                    </div>
                 </div>
-            </div>
+            </details>
+
+            <details class="form-fieldset" open>
+                <summary class="form-fieldset-summary">圖表</summary>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="multiple-selection-type">複選類型</label>
+                        <input type="text" id="multiple-selection-type">
+                    </div>
+                    <div class="form-group">
+                        <label for="graph-type">圖表類型</label>
+                        <input type="text" id="graph-type">
+                    </div>
+                    <div class="form-group">
+                        <label for="table-type">表格類型</label>
+                        <input type="text" id="table-type">
+                    </div>
+                    <div class="form-group">
+                        <label for="calculation-type">計算類型</label>
+                        <input type="text" id="calculation-type">
+                    </div>
+                    <div class="form-group" style="grid-column: 1 / -1;">
+                        <label for="inline-diagrams">內嵌圖 (inlineDiagrams)</label>
+                        <p style="margin:0 0 8px;color:var(--text-light);font-size:12px;line-height:1.45;">
+                            路徑寫入共用資料庫 <code>shared/diagrams/</code>（欄位值形如 <code>diagrams/檔名.jpg</code>，多個以逗號分隔）。可預覽、上載新檔，或以 AI 讀圖產生描述（經確認後寫入備註，不會改題幹）。
+                            <span id="inline-diagrams-rights-hint"></span>
+                        </p>
+                        <div id="inline-diagrams-preview" class="inline-diagrams-preview" aria-live="polite"></div>
+                        <div class="inline-diagrams-controls" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0;">
+                            <input type="file" id="inline-diagrams-file" accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml,.jpg,.jpeg,.png,.gif,.webp,.svg">
+                            <button type="button" class="btn btn-outline-primary btn-sm" id="inline-diagrams-upload" hidden>上載並加入</button>
+                            <button type="button" class="btn btn-outline-primary btn-sm" id="inline-diagrams-describe-local" hidden>AI 描述本機檔</button>
+                        </div>
+                        <input type="text" id="inline-diagrams" placeholder="diagrams/example.jpg, diagrams/other.png" autocomplete="off">
+                        <p id="inline-diagrams-status" class="inline-diagrams-status" style="margin:6px 0 0;font-size:12px;color:var(--text-light);" aria-live="polite"></p>
+                    </div>
+                </div>
+            </details>
 
             <div class="form-actions">
                 <button type="submit" class="btn btn-success">💾 儲存題目</button>

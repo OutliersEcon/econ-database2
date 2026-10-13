@@ -207,3 +207,42 @@
 .inline-diagrams-status.is-error {
     color: #c62828;
 }
+
+/* Grouped 新增／編輯 form sections */
+.form-fieldset {
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    padding: 0 0 var(--spacing-md);
+    margin: 0 0 var(--spacing-lg);
+    background: var(--white-bg);
+}
+
+.form-fieldset-summary {
+    list-style: none;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--primary-color);
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-light);
+    user-select: none;
+}
+
+.form-fieldset-summary::-webkit-details-marker {
+    display: none;
+}
+
+.form-fieldset-summary::before {
+    content: '▾ ';
+    color: var(--text-light);
+}
+
+.form-fieldset:not([open]) .form-fieldset-summary::before {
+    content: '▸ ';
+}
+
+.form-fieldset .form-grid,
+.form-fieldset > .form-group {
+    padding: var(--spacing-md) var(--spacing-md) 0;
+}
+
