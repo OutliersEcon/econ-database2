@@ -710,8 +710,8 @@ function staticFilterUniverse(def, counts) {
         const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
         const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
         const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
-        // Two-layer visual order: 有 → 簡短 → 詳盡 → 沒有
-        base = [labelHas, labelShort, labelDetailed, labelNone];
+        // Two-layer visual order: 有 → 詳盡 → 簡短 → 沒有
+        base = [labelHas, labelDetailed, labelShort, labelNone];
     }
     else base = Object.keys(counts);
 
@@ -740,13 +740,13 @@ function sortFilterValues(def, values, state) {
         if (selected[value] === 'excluded') return 1;
         return 2;
     };
-    // AI解釋: keep fixed hierarchy 有 → 簡短 → 詳盡 → 沒有 (no locale / selection re-order).
+    // AI解釋: keep fixed hierarchy 有 → 詳盡 → 簡短 → 沒有 (no locale / selection re-order).
     if (def.kind === 'ai') {
         const labelHas = (window.AiExplanation && AiExplanation.LABEL_HAS) || '有AI解釋';
         const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
         const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
         const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
-        const aiOrder = [labelHas, labelShort, labelDetailed, labelNone];
+        const aiOrder = [labelHas, labelDetailed, labelShort, labelNone];
         return values.slice().sort((a, b) => {
             const ia = aiOrder.indexOf(a);
             const ib = aiOrder.indexOf(b);
@@ -785,7 +785,7 @@ function datasetHasFilter(def, questions) {
         return false;
     }
     if (!def.optional) return true;
-    // AI解釋: always offer two-layer 有 → 簡短／詳盡 → 沒有 when the user has ai access.
+    // AI解釋: always offer two-layer 有 → 詳盡／簡短 → 沒有 when the user has ai access.
     if (def.kind === 'ai') return true;
     return Object.keys(countFilterValues(questions, def)).length > 0;
 }
