@@ -497,7 +497,7 @@
             + '</div>';
         document.body.appendChild(overlay);
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) closeModal();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) closeModal();
         });
         overlay.querySelector('.ai-explain-close').addEventListener('click', closeModal);
         overlay.querySelector('#ai-explain-done').addEventListener('click', closeModal);

@@ -344,7 +344,7 @@
         document.head.appendChild(style);
 
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) closeStemPatternReviewModal();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) closeStemPatternReviewModal();
         });
         overlay.querySelector('.spr-close').addEventListener('click', closeStemPatternReviewModal);
         overlay.querySelector('#spr-close-btn').addEventListener('click', closeStemPatternReviewModal);

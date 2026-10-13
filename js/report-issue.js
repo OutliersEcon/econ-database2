@@ -171,7 +171,7 @@
             + '</div>';
         document.body.appendChild(reportOverlay);
         reportOverlay.addEventListener('click', function (event) {
-            if (event.target === reportOverlay) closeReportModal();
+            if (event.target === reportOverlay && shouldCloseOnBackdropClick()) closeReportModal();
         });
         reportOverlay.querySelector('.report-issue-close').addEventListener('click', closeReportModal);
         reportOverlay.querySelector('#report-issue-cancel').addEventListener('click', closeReportModal);
@@ -349,7 +349,7 @@
             + '</div>';
         document.body.appendChild(hubOverlay);
         hubOverlay.addEventListener('click', function (event) {
-            if (event.target === hubOverlay) closeFeedbackHub();
+            if (event.target === hubOverlay && shouldCloseOnBackdropClick()) closeFeedbackHub();
         });
         hubOverlay.querySelector('.report-issue-close').addEventListener('click', closeFeedbackHub);
         hubOverlay.querySelector('#feedback-hub-done').addEventListener('click', closeFeedbackHub);

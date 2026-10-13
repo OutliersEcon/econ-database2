@@ -903,7 +903,7 @@
             + '</div>';
         document.body.appendChild(overlay);
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) closeDataChecksPanel();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) closeDataChecksPanel();
         });
         overlay.querySelector('.data-checks-close').addEventListener('click', closeDataChecksPanel);
         overlay.querySelector('#data-checks-done').addEventListener('click', closeDataChecksPanel);

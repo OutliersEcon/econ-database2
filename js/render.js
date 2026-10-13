@@ -41,7 +41,7 @@ function openOriginalImages(encoded) {
         overlay.id = 'original-image-overlay';
         overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:3000;overflow:auto;padding:24px;';
         overlay.addEventListener('click', (event) => {
-            if (event.target === overlay) overlay.remove();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) overlay.remove();
         });
         document.body.appendChild(overlay);
     }

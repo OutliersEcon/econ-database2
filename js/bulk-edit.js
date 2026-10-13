@@ -834,7 +834,7 @@
         document.head.appendChild(style);
 
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) closeBulkEditModal();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) closeBulkEditModal();
         });
         overlay.querySelector('.be-close').addEventListener('click', closeBulkEditModal);
         overlay.querySelector('#be-cancel').addEventListener('click', closeBulkEditModal);

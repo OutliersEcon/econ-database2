@@ -7,7 +7,7 @@
 //   filters: excludeOutSyl / rememberLast / searchScope / copyIncludeQuestionId  (NOT idSet / live tri-state)
 //   stats: mode / dimensions / metrics / crosstab / detailPrefs
 //   ai: defaultModel / provider / explainStyle / showQuickPrompts  (no API keys)
-//   ui: defaultTab
+//   ui: defaultTab / closeOnBackdropClick
 //
 // Anonymous / offline: localStorage only. Logged-in known users: debounce upload.
 
@@ -55,7 +55,7 @@
                 explainStyle: 'detailed',
                 showQuickPrompts: true
             },
-            ui: { defaultTab: 'questions' }
+            ui: { defaultTab: 'questions', closeOnBackdropClick: true }
         };
     }
 
@@ -238,6 +238,8 @@
                 : 'GPT-6.1-Sol';
         }
         if (base.ui.defaultTab !== 'stats') base.ui.defaultTab = 'questions';
+        // Missing / non-false → ON (current backdrop-click-to-close behaviour).
+        base.ui.closeOnBackdropClick = base.ui.closeOnBackdropClick !== false;
         // Never keep secrets even if somehow present.
         delete base.poeApiKey;
         delete base.openRouterApiKey;
@@ -662,6 +664,7 @@
             if (el) el.checked = !!on;
         };
         setVal('us-default-tab', s.ui.defaultTab);
+        setCheck('us-close-on-backdrop', s.ui.closeOnBackdropClick !== false);
         setVal('us-page-size', String(s.list.pageSize));
         setVal('us-sort', s.list.sort);
         setCheck('us-exclude-out-syl', s.filters.excludeOutSyl);
@@ -729,6 +732,7 @@
         };
         return patchSettings(function (s) {
             s.ui.defaultTab = val('us-default-tab') === 'stats' ? 'stats' : 'questions';
+            s.ui.closeOnBackdropClick = chk('us-close-on-backdrop');
             s.list.pageSize = parseInt(val('us-page-size'), 10);
             s.list.sort = val('us-sort') || 'default';
             s.filters.excludeOutSyl = chk('us-exclude-out-syl');
@@ -794,6 +798,8 @@
             + '            <option value="zh">中文</option>'
             + '            <option value="en">英文</option>'
             + '          </select></label>'
+            + '          <label class="user-settings-check"><input type="checkbox" id="us-close-on-backdrop"> 點擊背景關閉視窗</label>'
+            + '          <p class="user-settings-note">關閉後，彈出視窗只可用 ×／關閉／Escape 關閉，點擊背景不會關閉。</p>'
             + '        </div>'
             + '        <div class="user-settings-section">'
             + '          <h4 class="user-settings-subhead">題目列表</h4>'
@@ -881,7 +887,7 @@
             + '</div>';
         document.body.appendChild(overlay);
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) closeModal();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) closeModal();
         });
         overlay.querySelector('.user-settings-close').addEventListener('click', closeModal);
         overlay.querySelector('#user-settings-cancel').addEventListener('click', closeModal);

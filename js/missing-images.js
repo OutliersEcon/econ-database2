@@ -176,7 +176,7 @@
             + '</div>';
         document.body.appendChild(overlay);
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) closeMissingImagesPanel();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) closeMissingImagesPanel();
         });
         overlay.querySelector('.missing-images-close').addEventListener('click', closeMissingImagesPanel);
         overlay.querySelector('#missing-images-done').addEventListener('click', closeMissingImagesPanel);

@@ -232,7 +232,7 @@
         document.head.appendChild(style);
 
         overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) closeAdvancedFilterModal();
+            if (event.target === overlay && shouldCloseOnBackdropClick()) closeAdvancedFilterModal();
         });
         overlay.querySelector('.af-close').addEventListener('click', closeAdvancedFilterModal);
         overlay.querySelector('#af-done').addEventListener('click', closeAdvancedFilterModal);

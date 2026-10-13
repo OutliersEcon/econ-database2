@@ -1340,7 +1340,7 @@ async function openStatsFilterModal(tabId, key) {
             <div class="mf-footer">${logic}<span class="sf-modal-actions"><button type="button" class="btn mf-clear-btn" id="sf-clear">🗑️ 清除</button><button type="button" class="btn mf-done-btn" id="sf-done">完成</button></span></div>
         </div>`;
     overlay.addEventListener('click', event => {
-        if (event.target === overlay) closeStatsFilterModal();
+        if (event.target === overlay && shouldCloseOnBackdropClick()) closeStatsFilterModal();
         else event.stopPropagation();
     });
     document.body.appendChild(overlay);
