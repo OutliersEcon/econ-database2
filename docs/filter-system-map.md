@@ -160,8 +160,27 @@ These are **not** the same as modal `EMPTY_FIELD_SENTINEL` (`__empty__` / label�
 | `ai-explanation.js` | Side-file index; `filterValuesForQuestion` → `['有AI解釋', '簡短'?, '詳盡'?]` |
 | | `questionMatchesAiFilter(q, triAi)` — checked = AND, excluded = ANY block |
 | `storage-filters.js` | `filters.triState.ai` → `questionMatchesAiFilter` |
-| `filters.js` | Builds AI dropdown when `accessRights.ai` |
-| `stats-filters.js` | `kind: 'ai'` modal; hidden without AI right |
+| `filters.js` | Builds two-layer AI dropdown when `accessRights.ai` |
+| `stats-filters.js` | `kind: 'ai'` modal (same order + nest); hidden without AI right |
+
+**Two-layer UI** (題目 `#ai-options` and 統計 AI modal), visual order:
+
+1. 有AI解釋
+2. 簡短 (indented child under 有)
+3. 詳盡 (indented child under 有)
+4. 沒有AI解釋
+
+Labels stay `AiExplanation.LABEL_*` string keys; match engine unchanged.
+
+**Mutual exclusion** (`reconcileAiTriState` / `reconcileStatsAiTriState`):
+
+- Checking 「沒有AI解釋」 clears 有／簡短／詳盡.
+- Checking 有／簡短／詳盡 clears 「沒有AI解釋」 if it was checked.
+- Checking 簡短 or 詳盡 auto-checks 有 (unless 有 is excluded).
+- Excluding 有 clears 簡短／詳盡.
+- While 「沒有AI解釋」 is checked, 簡短／詳盡 render disabled (no toggle).
+
+Checked values remain **AND** in `questionMatchesAiFilter`.
 
 Legacy `question.AIExplanation` URL is ignored (schema v3 comment).
 
@@ -211,7 +230,7 @@ Intentionally separate: stats state must not mutate until jump — correct produ
 1. **`Out syl` excluded by default** on 題目 and 統計 (`globals.js:9`, `emptyStatsTriState`, `clearFilters`, stats modal clear). Hidden from badges/indicators so it looks like “no filter” while out-of-syllabus rows are dropped.
 2. **統計 search default `name`** does not search question text; only non-`name` scopes hit `applyFilters.search`.
 3. **Feature multi-select is AND** across keys (each `Object.entries` filter in `applyFilters`). Checking both `有分題` and `沒有分題` → empty set.
-4. **AI checked values are AND** (`questionMatchesAiFilter`); UI hint on「有AI解釋」says 剔選＝有／排除＝無, but combining「簡短」+「詳盡」requires both on one question.
+4. **AI checked values are AND** (`questionMatchesAiFilter`); two-layer UI mutual-excludes 有 vs 沒有 and nests 簡短／詳盡 under 有, but combining「簡短」+「詳盡」still requires both on one question.
 5. **Search scope `all`** omits concepts/patterns/stemPatterns (only dedicated scopes). ConditionMatch「字串」searches 題目+答案+評卷報告 via `questionSearchText`, not topic alone.
 6. **Confirmed-none vs 尚未輸入**: stored「沒有圖」≠ modal「尚未輸入」sentinel. Feature「複選」excludes「並非複選型」/「不適用」.
 7. **進階篩選 localStorage** survives `clearFilters` of the active layer (draft reopens); active `window.advancedFilter` is cleared by `clearFilters`.
@@ -234,8 +253,9 @@ Intentionally separate: stats state must not mutate until jump — correct produ
 
 ```
 accessRights.ai
-  → populate AI dropdown (filters.js) / show stats ai def
-  → triState.ai[有AI解釋|簡短|詳盡] = checked|excluded
+  → populate two-layer AI dropdown (filters.js) / show stats ai def
+  → triState.ai[有AI解釋|簡短|詳盡|沒有AI解釋] = checked|excluded
+       (UI mutual exclusion; checked still AND in match)
   → applyFilters → questionMatchesAiFilter
        → filterValuesForQuestion(id) from AiExplanation.store
 ```

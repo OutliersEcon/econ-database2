@@ -265,9 +265,48 @@ window.addEventListener('resize', function () {
     });
 });
 
+/** Mutual exclusion for AI解釋 two-layer UI (presence + detail).
+ *  Driven by the option just cycled so 有 vs 沒有 don't fight blindly. */
+function reconcileAiTriState(aiMap, justValue, justState) {
+    if (!aiMap || typeof aiMap !== 'object') return;
+    const labelHas = (window.AiExplanation && AiExplanation.LABEL_HAS) || '有AI解釋';
+    const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
+    const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
+    const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
+
+    if (justValue === labelNone && justState === 'checked') {
+        delete aiMap[labelHas];
+        delete aiMap[labelShort];
+        delete aiMap[labelDetailed];
+        return;
+    }
+
+    if ((justValue === labelHas || justValue === labelShort || justValue === labelDetailed)
+        && justState === 'checked') {
+        if (aiMap[labelNone] === 'checked') delete aiMap[labelNone];
+    }
+
+    if ((justValue === labelShort || justValue === labelDetailed)
+        && justState === 'checked'
+        && aiMap[labelHas] !== 'excluded') {
+        aiMap[labelHas] = 'checked';
+    }
+
+    if (justValue === labelHas && justState === 'excluded') {
+        delete aiMap[labelShort];
+        delete aiMap[labelDetailed];
+    }
+}
+
 function toggleTriState(element) {
     const filter = element.dataset.filter;
     let value = element.dataset.value;
+
+    // Disabled AI detail rows (簡短/詳盡) while 「沒有AI解釋」 is checked.
+    if (filter === 'ai' && element.classList.contains('ai-filter-disabled')) {
+        return;
+    }
+
     if (filter === 'year' && typeof normalizeYearFilterKey === 'function') {
         value = normalizeYearFilterKey(value) || value;
         if (element.dataset.value !== value) element.dataset.value = value;
@@ -276,6 +315,17 @@ function toggleTriState(element) {
     
     if (!window.triStateFilters[filter]) {
         window.triStateFilters[filter] = {};
+    }
+
+    // Detail rows stay inert while 「沒有」 is checked (DOM may lag one paint).
+    if (filter === 'ai') {
+        const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
+        const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
+        const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
+        if ((value === labelShort || value === labelDetailed)
+            && window.triStateFilters.ai[labelNone] === 'checked') {
+            return;
+        }
     }
     
     const currentState = window.triStateFilters[filter][value];
@@ -293,6 +343,7 @@ function toggleTriState(element) {
     }
 
     if (filter === 'year') consolidateYearTriState();
+    if (filter === 'ai') reconcileAiTriState(window.triStateFilters.ai, value, window.triStateFilters.ai[value]);
 
     const parentLabel = element.closest('.tri-state-label');
     if (parentLabel && element !== parentLabel) {
@@ -759,12 +810,20 @@ async function updateDynamicDropdowns() {
                     counts[v] = (counts[v] || 0) + 1;
                 });
             });
-            // Presence first (有／沒有), then detail level when present.
-            const items = [labelHas, labelNone, labelShort, labelDetailed];
-            aiContainer.innerHTML = items.map(item => {
+            // Two-layer: presence (有) → indented detail (簡短／詳盡) → 沒有.
+            const noneChecked = !!(window.triStateFilters.ai && window.triStateFilters.ai[labelNone] === 'checked');
+            const items = [
+                { value: labelHas, child: false },
+                { value: labelShort, child: true },
+                { value: labelDetailed, child: true },
+                { value: labelNone, child: false }
+            ];
+            aiContainer.innerHTML = items.map(({ value: item, child }) => {
                 const currentState = window.triStateFilters.ai && window.triStateFilters.ai[item];
-                let wrapperClass = 'tri-state-label';
+                let wrapperClass = 'tri-state-label ai-filter-option';
                 let checkboxClass = 'tri-state-checkbox';
+                if (child) wrapperClass += ' ai-filter-child';
+                if (child && noneChecked) wrapperClass += ' ai-filter-disabled';
                 if (currentState === 'checked') {
                     wrapperClass += ' checked';
                     checkboxClass += ' checked';
@@ -773,8 +832,9 @@ async function updateDynamicDropdowns() {
                     checkboxClass += ' excluded';
                 }
                 const count = counts[item] || 0;
+                const disabledAttr = (child && noneChecked) ? ' aria-disabled="true"' : '';
                 return `
-                <div class="${wrapperClass}" onclick="toggleTriState(this)" data-filter="ai" data-value="${item}">
+                <div class="${wrapperClass}" onclick="toggleTriState(this)" data-filter="ai" data-value="${item}"${disabledAttr}>
                     <div class="${checkboxClass}" data-filter="ai" data-value="${item}">
                         <span>${item} <small style="opacity: 0.6; font-size: 0.85em; margin-left: 4px;">(${count})</small></span>
                     </div>
