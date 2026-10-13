@@ -69,6 +69,8 @@
 // -----------
 // Modal has two tabs: 「資料檢查」(error/inconsistency checks) and
 // 「關注組合」(saved watch filter combos — match counts, not errors).
+// Both tabs share the same definition editor template (標題、模式含
+// 同年跨卷重疊、條件、例外); only persistence differs.
 //
 // 資料檢查 source of truth: shared/data/data-checks.json in
 // mas-repo/econ-database-data. Downloads prefer direct GitHub via
@@ -80,9 +82,10 @@
 // open. Remote refresh must not replace an in-progress draft. Missing remote
 // file → keep cache/defaults (does not wipe the bank).
 //
-// 關注組合 is local-only (econ_watch_combos_v1:<username>). It never calls
-// syncDataChecks* and never writes the shared checks file — so adding a
-// watch combo cannot clobber an in-progress check draft via upload refresh.
+// 關注組合 is local-only (econ_watch_combos_v1:<username>). Same editor /
+// evaluateCheck modes as checks, but counts stay non-error (「符合」) and it
+// never calls syncDataChecks* / never writes the shared checks file — so
+// adding a watch cannot clobber an in-progress check draft via upload refresh.
 //
 // Clicking a needs-handling ID clears the question filters, sets search scope
 // to 題目 ID, fills that id, switches to the 題目 tab, and runs filterQuestions
@@ -287,10 +290,17 @@
         var conditions = Array.isArray(raw.conditions)
             ? raw.conditions.map(normalizeCondition).filter(Boolean)
             : [];
+        var exceptions = Array.isArray(raw.exceptions)
+            ? raw.exceptions.map(function (item) {
+                return String(item == null ? '' : item).trim();
+            }).filter(Boolean)
+            : [];
         return {
             id: id,
             name: String(raw.name == null ? '' : raw.name).trim() || '未命名關注',
-            conditions: conditions
+            mode: normalizeCheckMode(raw.mode),
+            conditions: conditions,
+            exceptions: exceptions
         };
     }
 
@@ -350,9 +360,8 @@
     }
 
     function countWatchMatches(questions, watch) {
-        var m = Match();
-        if (!m || typeof m.matchingQuestionIds !== 'function') return 0;
-        return m.matchingQuestionIds(questions || [], (watch && watch.conditions) || []).length;
+        // Same evaluate path as checks (incl. 同年跨卷重疊); non-error label is UI-only.
+        return evaluateCheck(questions || [], watch).needsCount;
     }
 
     function setChecksStatus(text) {
@@ -495,7 +504,7 @@
         var subtitle = document.getElementById('data-checks-subtitle');
         if (subtitle) {
             if (activePanelTab === 'watches') {
-                subtitle.textContent = '儲存想持續留意的篩選組合（本機）。顯示符合題數；點題數或「套用」會以進階篩選套用該組合。關注組合不是錯誤檢查，也不會上傳到共用資料庫。';
+                subtitle.textContent = '儲存想持續留意的篩選組合（本機）。編輯介面與「資料檢查」相同（含普通／同年跨卷重疊模式、條件、例外）；顯示「符合」題數（非錯誤）。點題數或「套用」會篩選符合題目。關注組合不會上傳到共用資料庫。';
             } else {
                 subtitle.textContent = '列出仍需處理的題目（符合條件且不在該檢查的例外清單）。檢查模式可選普通檢查或同年跨卷重疊；可編輯標題、條件與例外；點題號會用既有「題目 ID」篩選顯示該題；「篩選全部待處理」會一次套用整批待處理編號（不經搜尋框）。';
             }
@@ -840,8 +849,8 @@
         button.id = 'data-checks-btn';
         button.className = 'btn btn-outline-primary header-toolbar-btn';
         button.hidden = true;
-        button.textContent = '資料檢查';
-        button.setAttribute('aria-label', '資料檢查');
+        button.textContent = '檢查與關注';
+        button.setAttribute('aria-label', '檢查與關注');
         button.addEventListener('click', function () {
             openDataChecksPanel();
         });
@@ -882,7 +891,7 @@
             + '<div class="data-checks-dialog" role="dialog" aria-modal="true" aria-labelledby="data-checks-title">'
             + '  <header class="data-checks-header">'
             + '    <div>'
-            + '      <h2 id="data-checks-title">資料檢查</h2>'
+            + '      <h2 id="data-checks-title">檢查與關注</h2>'
             + '      <p class="data-checks-subtitle" id="data-checks-subtitle">列出仍需處理的題目（符合條件且不在該檢查的例外清單）。檢查模式可選普通檢查或同年跨卷重疊；可編輯標題、條件與例外；點題號會用既有「題目 ID」篩選顯示該題；「篩選全部待處理」會一次套用整批待處理編號（不經搜尋框）。</p>'
             + '    </div>'
             + '    <button type="button" class="data-checks-close" aria-label="關閉">×</button>'
@@ -1021,7 +1030,8 @@
             var addWatchCond = event.target.closest('[data-dc-watch-add-cond]');
             if (addWatchCond) {
                 event.preventDefault();
-                addWatchConditionRow(addWatchCond.getAttribute('data-dc-watch-add-cond'));
+                if (mutationsLocked) return;
+                addConditionRow(addWatchCond.getAttribute('data-dc-watch-add-cond'));
                 return;
             }
             var removeCond = event.target.closest('[data-dc-remove-cond]');
@@ -1217,8 +1227,13 @@
         if (!editingCheckId) renderFromCache();
     }
 
-    function readEditorForm(checkId) {
-        var row = overlay && overlay.querySelector('[data-check-id="' + checkId + '"]');
+    function readDefinitionForm(itemId, kind) {
+        var isWatch = kind === 'watch';
+        var row = overlay && overlay.querySelector(
+            isWatch
+                ? ('[data-watch-id="' + itemId + '"]')
+                : ('[data-check-id="' + itemId + '"]')
+        );
         if (!row) return null;
         var nameInput = row.querySelector('[data-dc-name]');
         var modeSelect = row.querySelector('[data-dc-mode]');
@@ -1241,12 +1256,17 @@
             .map(function (item) { return item.trim(); })
             .filter(Boolean);
         return {
-            id: checkId,
-            name: String(nameInput && nameInput.value || '').trim() || '未命名檢查',
+            id: itemId,
+            name: String(nameInput && nameInput.value || '').trim()
+                || (isWatch ? '未命名關注' : '未命名檢查'),
             mode: normalizeCheckMode(modeSelect && modeSelect.value),
             conditions: conditions,
             exceptions: exceptions
         };
+    }
+
+    function readEditorForm(checkId) {
+        return readDefinitionForm(checkId, 'check');
     }
 
     async function saveEditedCheck(checkId) {
@@ -1273,8 +1293,10 @@
         if (!editingCheckId) renderFromCache();
     }
 
-    function addConditionRow(checkId) {
-        var row = overlay && overlay.querySelector('[data-check-id="' + checkId + '"] .data-checks-cond-list');
+    function addConditionRow(itemId) {
+        if (!overlay || !itemId) return;
+        var row = overlay.querySelector('[data-check-id="' + itemId + '"] .data-checks-cond-list')
+            || overlay.querySelector('[data-watch-id="' + itemId + '"] .data-checks-cond-list');
         if (!row) return;
         var wrap = document.createElement('div');
         wrap.innerHTML = conditionRowHtml({ type: 'textContains', value: '' });
@@ -1376,19 +1398,30 @@
         }
     }
 
-    function renderEditor(check) {
-        var conditionsHtml = (check.conditions.length ? check.conditions : [{ type: 'textContains', value: '' }]).map(function (condition) {
+    // Shared definition editor for 資料檢查 and 關注組合 (same fields/modes;
+    // kind only changes action data-attrs + delete label + default empty name).
+    function renderEditor(item, kind) {
+        var isWatch = kind === 'watch';
+        var conditions = (item && item.conditions && item.conditions.length)
+            ? item.conditions
+            : [{ type: 'textContains', value: '' }];
+        var conditionsHtml = conditions.map(function (condition) {
             return conditionRowHtml(condition);
         }).join('');
-        var mode = normalizeCheckMode(check.mode);
+        var mode = normalizeCheckMode(item && item.mode);
         var perSelected = mode === 'perQuestion' ? ' selected' : '';
         var crossSelected = mode === 'crossPaperSameYear' ? ' selected' : '';
+        var itemId = escapeAttr(item && item.id);
+        var saveAttr = isWatch ? 'data-dc-watch-save' : 'data-dc-save';
+        var cancelAttr = isWatch ? 'data-dc-watch-cancel' : 'data-dc-cancel';
+        var deleteAttr = isWatch ? 'data-dc-watch-delete' : 'data-dc-delete';
+        var deleteLabel = isWatch ? '刪除關注' : '刪除檢查';
 
         return ''
             + '<div class="data-checks-editor">'
             + '  <label class="data-checks-field">'
             + '    <span>標題</span>'
-            + '    <input type="text" data-dc-name value="' + escapeAttr(check.name) + '" maxlength="120">'
+            + '    <input type="text" data-dc-name value="' + escapeAttr(item && item.name) + '" maxlength="120">'
             + '  </label>'
             + '  <label class="data-checks-field">'
             + '    <span>檢查模式</span>'
@@ -1400,18 +1433,18 @@
             + '  <div class="data-checks-field">'
             + '    <div class="data-checks-field-head">'
             + '      <span>條件（全部 AND；每列選 包含/不包括、欄位、值）</span>'
-            + '      <button type="button" class="btn btn-outline-primary btn-sm" data-dc-add-cond="' + escapeAttr(check.id) + '">＋ 條件</button>'
+            + '      <button type="button" class="btn btn-outline-primary btn-sm" data-dc-add-cond="' + itemId + '">＋ 條件</button>'
             + '    </div>'
             + '    <div class="data-checks-cond-list">' + conditionsHtml + '</div>'
             + '  </div>'
             + '  <label class="data-checks-field">'
             + '    <span>例外題號（每行一個，格式如 DSE-2026-P1-01）</span>'
-            + '    <textarea data-dc-exceptions rows="4" placeholder="DSE-2026-P1-01">' + escapeHtml((check.exceptions || []).join('\n')) + '</textarea>'
+            + '    <textarea data-dc-exceptions rows="4" placeholder="DSE-2026-P1-01">' + escapeHtml(((item && item.exceptions) || []).join('\n')) + '</textarea>'
             + '  </label>'
             + '  <div class="data-checks-edit-actions">'
-            + '    <button type="button" class="btn btn-primary btn-sm" data-dc-save="' + escapeAttr(check.id) + '">儲存</button>'
-            + '    <button type="button" class="btn btn-secondary btn-sm" data-dc-cancel="' + escapeAttr(check.id) + '">取消</button>'
-            + '    <button type="button" class="btn btn-secondary btn-sm" data-dc-delete="' + escapeAttr(check.id) + '">刪除檢查</button>'
+            + '    <button type="button" class="btn btn-primary btn-sm" ' + saveAttr + '="' + itemId + '">儲存</button>'
+            + '    <button type="button" class="btn btn-secondary btn-sm" ' + cancelAttr + '="' + itemId + '">取消</button>'
+            + '    <button type="button" class="btn btn-secondary btn-sm" ' + deleteAttr + '="' + itemId + '">' + deleteLabel + '</button>'
             + '  </div>'
             + '</div>';
     }
@@ -1452,7 +1485,7 @@
 
                 if (editingCheckId === check.id) {
                     var editorWrap = document.createElement('div');
-                    editorWrap.innerHTML = renderEditor(check);
+                    editorWrap.innerHTML = renderEditor(check, 'check');
                     row.appendChild(editorWrap.firstChild);
                 } else {
                     var summary = document.createElement('p');
@@ -1547,35 +1580,8 @@
         return 'watch-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
     }
 
-    function addWatchConditionRow(watchId) {
-        var row = overlay && overlay.querySelector('[data-watch-id="' + watchId + '"] .data-checks-cond-list');
-        if (!row) return;
-        var wrap = document.createElement('div');
-        wrap.innerHTML = conditionRowHtml({ type: 'textContains', value: '' });
-        row.appendChild(wrap.firstChild);
-    }
-
     function readWatchEditorForm(watchId) {
-        var row = overlay && overlay.querySelector('[data-watch-id="' + watchId + '"]');
-        if (!row) return null;
-        var nameInput = row.querySelector('[data-dc-watch-name]');
-        var conditionRows = row.querySelectorAll('[data-dc-cond-row]');
-        var conditions = [];
-        conditionRows.forEach(function (condRow) {
-            var valueEl = condRow.querySelector('[data-dc-cond-value]');
-            var choices = readConditionChoices(condRow);
-            var normalized = normalizeCondition({
-                include: choices.include,
-                field: choices.field,
-                value: valueEl ? valueEl.value : ''
-            });
-            if (normalized) conditions.push(normalized);
-        });
-        return {
-            id: watchId,
-            name: String(nameInput && nameInput.value || '').trim() || '未命名關注',
-            conditions: conditions
-        };
+        return readDefinitionForm(watchId, 'watch');
     }
 
     async function addBlankWatch() {
@@ -1584,14 +1590,16 @@
         var watch = {
             id: newWatchId(),
             name: '新關注',
-            conditions: [{ include: true, field: 'text', value: '', type: 'textContains' }]
+            mode: 'perQuestion',
+            conditions: [{ include: true, field: 'text', value: '', type: 'textContains' }],
+            exceptions: []
         };
         activeWatches.push(watch);
         unsavedWatchDraftIds[watch.id] = true;
         editingWatchId = watch.id;
         renderFromCache();
         var nameInput = overlay && overlay.querySelector(
-            '[data-watch-id="' + watch.id + '"] [data-dc-watch-name]'
+            '[data-watch-id="' + watch.id + '"] [data-dc-name]'
         );
         if (nameInput) {
             nameInput.focus();
@@ -1649,6 +1657,31 @@
             window.alert('此關注組合尚未設定條件。');
             return;
         }
+        var questions = Array.isArray(cachedQuestions) ? cachedQuestions : [];
+        var result = evaluateCheck(questions, watch);
+        var ids = (result.needsHandling || []).filter(function (qid) {
+            return qid && qid !== '(無編號)';
+        });
+        // crossPaperSameYear (and exceptions) need the evaluated ID set;
+        // plain perQuestion with no exceptions can still use advanced filter.
+        var useIdSet = normalizeCheckMode(watch.mode) === 'crossPaperSameYear'
+            || ((watch.exceptions || []).length > 0);
+        if (useIdSet) {
+            if (!ids.length) {
+                window.alert('此關注組合目前沒有符合題目。');
+                return;
+            }
+            closeDataChecksPanel();
+            if (typeof applyQuestionIdSetFilter === 'function') {
+                applyQuestionIdSetFilter(ids, {
+                    label: '關注：' + watch.name + ' · 符合 ' + ids.length + ' 題',
+                    source: 'watch-combo'
+                });
+            } else {
+                window.alert('題目集合篩選尚未載入。');
+            }
+            return;
+        }
         closeDataChecksPanel();
         if (typeof applyAdvancedConditionFilter === 'function') {
             applyAdvancedConditionFilter(watch.conditions, {
@@ -1658,31 +1691,6 @@
         } else {
             window.alert('進階篩選尚未載入。');
         }
-    }
-
-    function renderWatchEditor(watch) {
-        var conditionsHtml = (watch.conditions.length ? watch.conditions : [{ type: 'textContains', value: '' }]).map(function (condition) {
-            return conditionRowHtml(condition);
-        }).join('');
-        return ''
-            + '<div class="data-checks-editor">'
-            + '  <label class="data-checks-field">'
-            + '    <span>標題</span>'
-            + '    <input type="text" data-dc-watch-name value="' + escapeAttr(watch.name) + '" maxlength="120">'
-            + '  </label>'
-            + '  <div class="data-checks-field">'
-            + '    <div class="data-checks-field-head">'
-            + '      <span>條件（全部 AND；關注組合，不是錯誤檢查）</span>'
-            + '      <button type="button" class="btn btn-outline-primary btn-sm" data-dc-watch-add-cond="' + escapeAttr(watch.id) + '">＋ 條件</button>'
-            + '    </div>'
-            + '    <div class="data-checks-cond-list">' + conditionsHtml + '</div>'
-            + '  </div>'
-            + '  <div class="data-checks-edit-actions">'
-            + '    <button type="button" class="btn btn-primary btn-sm" data-dc-watch-save="' + escapeAttr(watch.id) + '">儲存</button>'
-            + '    <button type="button" class="btn btn-secondary btn-sm" data-dc-watch-cancel="' + escapeAttr(watch.id) + '">取消</button>'
-            + '    <button type="button" class="btn btn-secondary btn-sm" data-dc-watch-delete="' + escapeAttr(watch.id) + '">刪除關注</button>'
-            + '  </div>'
-            + '</div>';
     }
 
     function renderWatches(questions) {
@@ -1699,7 +1707,8 @@
             body.appendChild(empty);
         } else {
             watches.forEach(function (watch) {
-                var matchCount = countWatchMatches(questions, watch);
+                var result = evaluateCheck(questions, watch);
+                var matchCount = result.needsCount;
                 var row = document.createElement('section');
                 row.className = 'data-checks-row';
                 row.setAttribute('data-watch-id', watch.id);
@@ -1715,19 +1724,34 @@
                 counts.className = 'data-checks-counts';
                 counts.innerHTML = ''
                     + '<button type="button" class="data-checks-count is-watch" data-dc-watch-apply="' + escapeAttr(watch.id) + '"'
-                    + ' title="套用此關注組合到題目列表">符合 <strong>' + matchCount + '</strong></button>';
+                    + ' title="套用此關注組合到題目列表">符合 <strong>' + matchCount + '</strong></button>'
+                    + '<span class="data-checks-count is-exceptions">例外 <strong>' + result.exceptionCount + '</strong></span>';
                 head.appendChild(counts);
                 row.appendChild(head);
 
                 if (editingWatchId === watch.id) {
                     var editorWrap = document.createElement('div');
-                    editorWrap.innerHTML = renderWatchEditor(watch);
+                    editorWrap.innerHTML = renderEditor(watch, 'watch');
                     row.appendChild(editorWrap.firstChild);
                 } else {
                     var summary = document.createElement('p');
                     summary.className = 'data-checks-row-summary';
-                    summary.textContent = conditionSummary(watch) || '（尚未設定條件）';
+                    var modeText = checkModeLabel(watch.mode);
+                    var condText = conditionSummary(watch) || '（尚未設定條件）';
+                    summary.textContent = modeText + ' · ' + condText;
                     row.appendChild(summary);
+
+                    if (normalizeCheckMode(watch.mode) === 'crossPaperSameYear') {
+                        var hitNote = document.createElement('p');
+                        hitNote.className = 'data-checks-hit-groups';
+                        var groups = result.hitGroups || [];
+                        if (groups.length) {
+                            hitNote.textContent = '重疊年份：' + groups.map(formatHitGroupLabel).join('；');
+                        } else {
+                            hitNote.textContent = '重疊年份：目前沒有同年跨卷命中';
+                        }
+                        row.appendChild(hitNote);
+                    }
 
                     var actions = document.createElement('div');
                     actions.className = 'data-checks-row-actions';
@@ -1740,6 +1764,44 @@
                         + '<button type="button" class="btn btn-outline-primary btn-sm" data-dc-watch-edit="' + escapeAttr(watch.id) + '">編輯</button>'
                         + '<button type="button" class="btn btn-secondary btn-sm" data-dc-watch-delete="' + escapeAttr(watch.id) + '">刪除</button>';
                     row.appendChild(actions);
+
+                    var details = document.createElement('details');
+                    details.className = 'data-checks-ids';
+                    if (openDetails['watch:' + watch.id]) details.open = true;
+                    details.addEventListener('toggle', function () {
+                        openDetails['watch:' + watch.id] = details.open;
+                    });
+                    var summaryEl = document.createElement('summary');
+                    summaryEl.textContent = matchCount
+                        ? ('查看符合題目編號（' + matchCount + '）— 點編號可篩選該題')
+                        : '沒有符合題目';
+                    details.appendChild(summaryEl);
+                    if (matchCount) {
+                        var list = document.createElement('ul');
+                        list.className = 'data-checks-id-list';
+                        result.needsHandling.forEach(function (id) {
+                            var item = document.createElement('li');
+                            if (id === '(無編號)') {
+                                item.textContent = id;
+                            } else {
+                                var btn = document.createElement('button');
+                                btn.type = 'button';
+                                btn.className = 'data-checks-qid';
+                                btn.setAttribute('data-dc-qid', id);
+                                btn.title = '用題目 ID 篩選顯示此題';
+                                btn.textContent = id;
+                                item.appendChild(btn);
+                            }
+                            list.appendChild(item);
+                        });
+                        details.appendChild(list);
+                    } else {
+                        var none = document.createElement('p');
+                        none.className = 'data-checks-empty';
+                        none.textContent = '目前沒有符合的題目。';
+                        details.appendChild(none);
+                    }
+                    row.appendChild(details);
                 }
                 body.appendChild(row);
             });
