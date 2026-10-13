@@ -112,7 +112,7 @@ Per-question AI explanations live in the private side file `shared/data/ai-expla
 
 - Generate: Apps Script `generateAiExplanation` (same provider / model / API-key settings as AI出題). Detail levels **簡短** / **詳盡**. Prompt payload always includes **Chinese + English** stem and answers; both detail levels ask for **bilingual** explanations.
 - Existing explanations load from the side file (direct shared read preferred). Users with `ai` can **vote** (`voteAiExplanation`) and send text **feedback** (`feedbackAiExplanation`).
-- Filter (題目 + 統計): AI解釋 — 有AI解釋／沒有AI解釋／簡短／詳盡 (`requiresAi`). Stats uses it as a **filter only**, never a grouping dimension.
+- Filter (題目 + 統計): AI解釋 — two-layer 有AI解釋 → indented 簡短／詳盡 → 沒有AI解釋 (`requiresAi`). Stats uses it as a **filter only**, never a grouping dimension.
 - Admin can **delete one explanation** (`deleteAiExplanation`) from the AI解釋 modal or the「回饋／回報」AI tab. Admin lists feedback via `listAiExplanationFeedback` (see **回報問題** hub below). Redeploy Apps Script when these handlers change.
 
 ## 回報問題 + admin 回饋／回報

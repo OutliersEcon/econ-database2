@@ -710,7 +710,8 @@ function staticFilterUniverse(def, counts) {
         const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
         const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
         const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
-        base = [labelHas, labelNone, labelShort, labelDetailed];
+        // Two-layer visual order: 有 → 簡短 → 詳盡 → 沒有
+        base = [labelHas, labelShort, labelDetailed, labelNone];
     }
     else base = Object.keys(counts);
 
@@ -739,6 +740,20 @@ function sortFilterValues(def, values, state) {
         if (selected[value] === 'excluded') return 1;
         return 2;
     };
+    // AI解釋: keep fixed hierarchy 有 → 簡短 → 詳盡 → 沒有 (no locale / selection re-order).
+    if (def.kind === 'ai') {
+        const labelHas = (window.AiExplanation && AiExplanation.LABEL_HAS) || '有AI解釋';
+        const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
+        const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
+        const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
+        const aiOrder = [labelHas, labelShort, labelDetailed, labelNone];
+        return values.slice().sort((a, b) => {
+            const ia = aiOrder.indexOf(a);
+            const ib = aiOrder.indexOf(b);
+            return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+        });
+    }
+
     return values.slice().sort((a, b) => {
         const ra = rank(a);
         const rb = rank(b);
@@ -770,7 +785,7 @@ function datasetHasFilter(def, questions) {
         return false;
     }
     if (!def.optional) return true;
-    // AI解釋: always offer 有／沒有／簡短／詳盡 when the user has ai access.
+    // AI解釋: always offer two-layer 有 → 簡短／詳盡 → 沒有 when the user has ai access.
     if (def.kind === 'ai') return true;
     return Object.keys(countFilterValues(questions, def)).length > 0;
 }
@@ -1389,12 +1404,20 @@ function renderStatsModalList() {
         list.innerHTML = '<div class="mf-empty">沒有符合的選項</div>';
         return;
     }
+    const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
+    const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
+    const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
+    const aiNoneChecked = sfModal.def.kind === 'ai' && selected[labelNone] === 'checked';
     list.innerHTML = opts.map((value, index) => {
         const mode = selected[value] === 'checked' ? 'include' : selected[value] === 'excluded' ? 'exclude' : 'none';
         const mark = mode === 'include' ? '✔' : mode === 'exclude' ? '✕' : '';
         const count = sfModal.counts[value] || 0;
+        const isAiChild = sfModal.def.kind === 'ai' && (value === labelShort || value === labelDetailed);
+        const nestedClass = isAiChild ? ' mf-option-nested' : '';
+        const disabledClass = (isAiChild && aiNoneChecked) ? ' mf-option-disabled' : '';
+        const disabledAttr = (isAiChild && aiNoneChecked) ? ' disabled aria-disabled="true"' : '';
         return `
-            <button type="button" class="mf-option mf-${mode}" data-idx="${index}">
+            <button type="button" class="mf-option mf-${mode}${nestedClass}${disabledClass}" data-idx="${index}"${disabledAttr}>
                 <span class="mf-mark">${mark}</span>
                 <span class="mf-option-label">${escapeHTML(filterValueLabel(sfModal.def, value))}</span>
                 <span class="mf-count">(${count})</span>
@@ -1402,13 +1425,61 @@ function renderStatsModalList() {
     }).join('');
 }
 
+function reconcileStatsAiTriState(aiMap, justValue, justState) {
+    if (!aiMap || typeof aiMap !== 'object') return;
+    const labelHas = (window.AiExplanation && AiExplanation.LABEL_HAS) || '有AI解釋';
+    const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
+    const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
+    const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
+
+    if (justValue === labelNone && justState === 'checked') {
+        delete aiMap[labelHas];
+        delete aiMap[labelShort];
+        delete aiMap[labelDetailed];
+        return;
+    }
+
+    if ((justValue === labelHas || justValue === labelShort || justValue === labelDetailed)
+        && justState === 'checked') {
+        if (aiMap[labelNone] === 'checked') delete aiMap[labelNone];
+    }
+
+    if ((justValue === labelShort || justValue === labelDetailed)
+        && justState === 'checked'
+        && aiMap[labelHas] !== 'excluded') {
+        aiMap[labelHas] = 'checked';
+    }
+
+    if (justValue === labelHas && justState === 'excluded') {
+        delete aiMap[labelShort];
+        delete aiMap[labelDetailed];
+    }
+}
+
 function cycleStatsOption(tabId, key, value) {
     const state = getStatsTabState(tabId);
     if (!state.triState[key]) state.triState[key] = {};
+
+    // Skip cycling AI detail while 「沒有AI解釋」 is checked.
+    if (key === 'ai') {
+        const labelNone = (window.AiExplanation && AiExplanation.LABEL_NONE) || '沒有AI解釋';
+        const labelShort = (window.AiExplanation && AiExplanation.LABEL_SHORT) || '簡短';
+        const labelDetailed = (window.AiExplanation && AiExplanation.LABEL_DETAILED) || '詳盡';
+        if ((value === labelShort || value === labelDetailed)
+            && state.triState.ai[labelNone] === 'checked') {
+            return;
+        }
+    }
+
     const current = state.triState[key][value];
     if (!current) state.triState[key][value] = 'checked';
     else if (current === 'checked') state.triState[key][value] = 'excluded';
     else delete state.triState[key][value];
+
+    if (key === 'ai') {
+        reconcileStatsAiTriState(state.triState.ai, value, state.triState.ai[value]);
+    }
+
     state.page = 1;
     renderStatsModalList();
     scheduleStatsRender(tabId);

@@ -551,10 +551,25 @@
    AI解釋 filter: JS unhides #ai-filter-item when
    accessRights.ai; CSS hides when body lacks poe-ai-allowed
    (same gate as AI出題 / card AI解釋 buttons).
+   Two-layer UI: presence on top, detail indented under 有.
    ============================================ */
 
 body:not(.poe-ai-allowed) #ai-filter-item {
     display: none !important;
+}
+
+#ai-options .ai-filter-child {
+    padding-left: 22px;
+}
+
+#ai-options .ai-filter-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+#ai-options .ai-filter-disabled:hover {
+    background: transparent;
 }
 
 /* ============================================
@@ -868,6 +883,19 @@ body:not(.poe-ai-allowed) #ai-filter-item {
 }
 
 .mf-option:hover { background: #f3f4f6; }
+
+/* AI解釋 stats modal: indented detail under 有 */
+.mf-option.mf-option-nested {
+    padding-left: 28px;
+}
+
+.mf-option.mf-option-disabled,
+.mf-option.mf-option-disabled:hover {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: #fff;
+    pointer-events: none;
+}
 
 .mf-mark {
     width: 18px;
