@@ -273,7 +273,7 @@ Expected layout inside the private repository:
 - `shared/originals/` — question, answer, and report images. Those fields stay `originals/...`
 - `shared/papers/mock-tests/` — mock-paper packs
 - `shared/papers/past-papers/` — past-paper packs
-- `shared/build/` — classification JSON used by the import scripts
+- `shared/build/` — historical classification JSON for **retired** Python import helpers (see `../archive/classification-python/`). Not a live write path; do not use it to patch the bank. Classification proposals go to `shared/data/classification-proposals.json` via `submitClassificationProposal`.
 
 `users/<username>/` holds personal AI出題 backups only and is not readable through the shared-asset Apps Script actions. Question-bank sync writes the shared bank under `shared/data/…`, not under `users/`.
 
@@ -285,7 +285,7 @@ Both list/fetch actions and `issueSharedReadToken` require a known username (adm
 
 `sharedConfigured` on a GET of `/exec` is true when a shared read can be attempted via Apps Script. `directReadConfigured` is true when App or `GITHUB_READ_TOKEN` credentials are ready. GET does not reveal the prefix or any token.
 
-Copy the files into a local checkout of the private repository with `econ-database/scripts/stage_shared_assets.py`, then commit them there. That script does not contain a token. After `Code.gs` changes, paste this file into the live Apps Script project and deploy a new version. Property-only edits, including `GITHUB_SHARED_PREFIX` and `GITHUB_READ_TOKEN`, apply immediately; code changes do not until redeploy.
+Copy shared assets into a local checkout of the private data repository (historically `scripts/stage_shared_assets.py` on a private/full checkout; that helper is not shipped in this public tree and is **not** a classification writer), then commit them there. That script must not contain a token. After `Code.gs` changes, paste this file into the live Apps Script project and deploy a new version. Property-only edits, including `GITHUB_SHARED_PREFIX` and `GITHUB_READ_TOKEN`, apply immediately; code changes do not until redeploy.
 
 The public site must not commit these assets. When publishing `econ-database/` to the public Pages repository `mas-repo/econ-database2`, do not restore `data/database.json`, `diagrams/`, `originals/`, `MockTests/`, or `PastPaper/` from an older public commit.
 

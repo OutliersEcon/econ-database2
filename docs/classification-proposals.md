@@ -1,5 +1,7 @@
 # 分類提案 staging (concepts / stemPatterns)
 
+**Canonical write path:** 分類專員 → Apps Script `submitClassificationProposal` (staging) → admin **回饋／回報 → 分類審批**. Do **not** write `concepts` / `stemPatterns` into `database.json` from Python batch scripts or other bypasses. Retired Python entry points: [`../archive/classification-python/`](../archive/classification-python/).
+
 ## Staging path
 
 `shared/data/classification-proposals.json` in **econ-database-data**
@@ -40,9 +42,9 @@ Replacing an existing pending `questionId` is allowed while paused.
 
 Batch: `{ "proposals": [ … ] }` (cap 200 per call).
 
-### Alternate: file PR
+### Alternate: file PR (staging file only)
 
-Append objects to `proposals[]` with the same fields plus `id`, `createdAt`, `status:"pending"`. Prefer the API so the pause gate is enforced.
+Append objects to `proposals[]` with the same fields plus `id`, `createdAt`, `status:"pending"`. Prefer the API so the pause gate is enforced. **Never** PR direct edits to `database.json` / shards for classification.
 
 ## Human review
 

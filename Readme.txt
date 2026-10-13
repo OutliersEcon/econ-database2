@@ -9,9 +9,12 @@ the page stays without questions and does not use a local copy. Users can
 also import another JSON file with the same shape. The UI is in Traditional
 Chinese.
 
-Future agents adding mock papers should read /README.md first. The
-Python builder is only the first import. Records with reviewedByAI Y
-must not be overwritten. lastReviewDate is the day of that read.
+Future agents adding mock papers should read /README.md first.
+Classification writes must go through staging (submitClassificationProposal)
+then 分類審批 — not Python batch scripts that patch the bank. See
+archive/classification-python/ and docs/classification-proposals.md.
+Records with reviewedByAI Y must not be overwritten. lastReviewDate is
+the day of that read.
 
 Documentation convention: do NOT use fenced code blocks anywhere in this
 Readme. Describe code, file paths, and identifiers inline in prose or in
@@ -206,12 +209,21 @@ Templates (js/templates/):
 
 ## 6. Changelog
 
-### 2026-09-30 (current)
+### 2026-10-13 (current)
+- Retired Python classification batch entry points as day-to-day writers.
+  Documented inventory under archive/classification-python/. Canonical
+  path: submitClassificationProposal staging then 分類審批. Kept
+  vocabulary conventions, tip notes, and reviewed samples.
+
+### 2026-09-30
+
 - Added stemPatterns (題幹模式): seventh modal long-option filter
   (🧩 題幹模式), statistics tab 題幹模式統計, and agent-facing README.md
-  for taxonomy / writing rules. Import helpers live under scripts/
+  for taxonomy / writing rules. Historical Python import helpers
   (apply_stem_patterns_import.py, auto_assign, fuzzy_assign,
-  merge_stem_pattern_classifications.py, classify_chunks/).
+  merge_stem_pattern_classifications.py, classify_chunks/) are retired;
+  see archive/classification-python/. Live writes use classification
+  staging + 分類審批 only.
 - Added 題號 dual-thumb range slider (last digits of id;
   QUESTION_NUMBER_RANGE).
 

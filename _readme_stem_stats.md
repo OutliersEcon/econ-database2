@@ -133,7 +133,7 @@
 40. **6** — 未命名題型1
 
 ## 3. Original Excel 78 vocab
-- Source: `scripts/classify_chunks/vocab.json` (= unique patterns in `scripts/stem_patterns_import.json`)
+- Source (historical): `scripts/classify_chunks/vocab.json` (= unique patterns in `scripts/stem_patterns_import.json`). Those paths are **retired**; live vocabulary is private `shared/data/vocabulary.json`. See `archive/classification-python/`.
 - Still appear in questions: **78 / 78**
 - Zero uses: **0** — none
 - Use-count range among Excel 78: 1–33
@@ -145,7 +145,7 @@
 - 6+ uses: **42**
 
 ## 5. Singleton invented patterns that look too specific (15)
-Invented = not in Excel 78 (`scripts/classify_chunks/vocab.json`). Singleton = frequency 1. No invented singleton contains a calendar year (19xx/20xx) or English personal name; closest person-name case is 陳先生/黃先生. Remaining examples are story-locked venues/events or firm-form strings that should usually be abstracted to (某企業)/(某事件).
+Invented = not in Excel 78 (historical `scripts/classify_chunks/vocab.json`; now use live `vocabulary.json`). Singleton = frequency 1. No invented singleton contains a calendar year (19xx/20xx) or English personal name; closest person-name case is 陳先生/黃先生. Remaining examples are story-locked venues/events or firm-form strings that should usually be abstracted to (某企業)/(某事件).
 
 1. [person_names] （兩人交通選擇）陳先生會乘搭 __________ 而黃先生會乘搭 __________  _(e.g. CE-2000-P2-02)_
 2. [concrete_venue_or_event] (農曆新年食肆) 可變成本、需求彈性、基本經濟問題、供需圖  _(e.g. MT30-P2-08)_

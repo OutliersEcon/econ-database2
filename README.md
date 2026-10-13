@@ -133,6 +133,8 @@ Form / 批量編輯 can still edit parts directly on the bank. Redeploy Apps Scr
 
 ## 分類提案審批 (staging)
 
+**Only write path for classification:** 分類專員 → staging → 審批與回報 → 分類審批. Retired Python batch entry points: `archive/classification-python/`.
+
 AI / review bots must **not** write `concepts` or `stemPatterns` straight into `database.json`. They call Apps Script `submitClassificationProposal` (`admin` or `githubSync`), which upserts pending rows in `shared/data/classification-proposals.json` (one pending proposal per `questionId`; fields may be `concepts` and/or `stemPatterns`). **Submit never touches the bank.**
 
 **Pause at 200:** when pending count ≥ 200, new-question intake is rejected with `{ ok:false, paused:true, pendingCount, pauseThreshold:200 }`. Replacing an existing pending `questionId` is still allowed. The admin **分類審批** tab shows a paused banner when the backlog is at the limit.
@@ -228,14 +230,20 @@ Set `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_BRANCH`, `GITHUB_DATA
 
 `GITHUB_SHARED_PREFIX` is optional and defaults to `shared`. A known username (admin, AI editor, mock, or restricted) can read shared bank JSON (combined `database.json` and publisher shards `database-hkeaa.json` / `database-aristo.json`), `shared/diagrams/`, `shared/originals/`, and `shared/papers/` after Apps Script issues a read credential (or via `fetchSharedAsset` / `listSharedData` fallback). Those actions never return the write token. An unknown username does not receive the bank or a read token. Without `mockTests`, load prefers the HKEAA shard (no 雅集 download); on combined-file fallback the client (or proxy) strips mock-test rows from `database.json`, and mock-only paths are refused (`diagrams/`, `papers/mock-tests/`, numbered `originals/` folders, `build/`, `database.js`, and `database-aristo.json`). Past papers under `originals/dse/` and `papers/past-papers/` stay available. **Phase 3 safety:** uploading with HKEAA-only IndexedDB updates the HKEAA shard (if dirty) and rebuilds combined using cloud 雅集 for the missing publisher — it does **not** wipe `database-aristo.json`. Unknown publishers are rejected. Details: `apps-script/README.md`.
 
-## Import scripts / 匯入腳本
+## Classification write path (only) / 分類寫入路徑（唯一）
 
-Under scripts/:
+**Do not write `concepts` or `stemPatterns` straight into `database.json` / publisher shards** from Python, local batch scripts, or ad-hoc GitHub Contents API edits.
 
-- apply_stem_patterns_import.py — apply classifications from the Excel taxonomy into the JSON bank / vocabulary.
-- auto_assign_stem_patterns.py (auto_assign) — high-confidence automatic assignment pass.
-- fuzzy_assign_stem_patterns.py (fuzzy_assign) — fuzzy matching assign pass.
-- merge_stem_pattern_classifications.py — merge classification outputs.
-- classify_chunks/ — chunked classification work products.
+Canonical path:
 
-stemPatterns fills from these tools are additive. Builders that update unrelated fields must not clear or replace reviewedByAI Y records.
+1. **分類專員** (or any `admin` / `githubSync` bot) proposes via Apps Script **`submitClassificationProposal`** (batch OK; pause when pending ≥ 200).
+2. Rows land in private **`shared/data/classification-proposals.json`** only — staging never patches the bank.
+3. Human opens **回饋／回報 → 分類審批**, then **通過** / **拒絕** (`approveClassificationProposal` / `rejectClassificationProposal` + bulk).
+
+Details: `docs/classification-proposals.md`.
+
+### Deprecated: Python batch / local classify scripts
+
+Old entry points (`apply_stem_patterns_import.py`, `auto_assign_stem_patterns.py`, `fuzzy_assign_stem_patterns.py`, `merge_stem_pattern_classifications.py`, `classify_chunks/`, and any local “how to run classify” that wrote the DB) are **retired**. Inventory and policy: **`archive/classification-python/`**. Those files were documented under `scripts/` but were never shipped in this public tree; do not reintroduce them as live writers.
+
+**Still keep:** `vocabulary.json` + concept/stem conventions, writing-rule / tip notes in this README and `_readme_stem_stats.md`, validation/reconciliation in the app (`js/data-checks.js`, stats), and historical `reviewedByAI Y` samples. stemPatterns updates for reviewed rows remain additive when applied through admin approve or in-app edit — never a wipe-and-replace from a batch builder.
