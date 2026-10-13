@@ -119,7 +119,7 @@ Per-question AI explanations live in the private side file `shared/data/ai-expla
 
 **回報問題** (`js/report-issue.js`): any **signed-in known user** can open the button on a question card. Tags: 有錯字 / 圖片未能正確顯示 / 分類不正確 / 其他 (+ optional text). Persists to `shared/data/issue-reports.json` via Apps Script `reportIssue`. Not gated on `ai` or `githubSync`.
 
-**Admin hub:** when `accessRights.admin`, header shows **回饋／回報** (replaces the older standalone「AI解釋 Feedback」button). Tabs: **回報問題** (`listIssueReports`)、**AI解釋 Feedback** (`listAiExplanationFeedback`)、**分題審批** (`listQuestionPartsProposals`). Newest first; refresh reloads all. Side-file contracts use bank `SCHEMA_VERSION` as a deploy gate (see `js/constants.js`).
+**Admin hub:** when `accessRights.admin`, header shows **回饋／回報** (replaces the older standalone「AI解釋 Feedback」button). Tabs: **回報問題** (`listIssueReports`)、**AI解釋 Feedback** (`listAiExplanationFeedback`)、**分題審批** (`listQuestionPartsProposals`)、**分類審批** (`listClassificationProposals`). Newest first; refresh reloads all. Side-file contracts use bank `SCHEMA_VERSION` as a deploy gate (see `js/constants.js`).
 
 ## 分題提案審批 (staging)
 
@@ -130,6 +130,35 @@ Admins open **回饋／回報 → 分題審批**:
 - **拒絕** → `rejectQuestionPartsProposal` removes the staging row only.
 
 Form / 批量編輯 can still edit parts directly on the bank. Redeploy Apps Script after merge. Coordinate staging file creation with **econ-database-data** (`shared/data/question-parts-proposals.json`).
+
+## 分類提案審批 (staging)
+
+AI / review bots must **not** write `concepts` or `stemPatterns` straight into `database.json`. They call Apps Script `submitClassificationProposal` (`admin` or `githubSync`), which upserts pending rows in `shared/data/classification-proposals.json` (one pending proposal per `questionId`; fields may be `concepts` and/or `stemPatterns`). **Submit never touches the bank.**
+
+**Pause at 200:** when pending count ≥ 200, new-question intake is rejected with `{ ok:false, paused:true, pendingCount, pauseThreshold:200 }`. Replacing an existing pending `questionId` is still allowed. The admin **分類審批** tab shows a paused banner when the backlog is at the limit.
+
+**JSON shape (intake):**
+```json
+{
+  "action": "submitClassificationProposal",
+  "username": "…",
+  "questionId": "DSE-…",
+  "fields": ["concepts", "stemPatterns"],
+  "currentValues": { "concepts": ["…"], "stemPatterns": ["…"] },
+  "proposedValues": { "concepts": ["…"], "stemPatterns": ["…"] },
+  "reason": "optional",
+  "confidence": "高|中|低|",
+  "createdBy": "Econ 分類審核"
+}
+```
+Batch: `{ "proposals": [ /* same fields */ ] }` (cap 200). Or append via PR to the staging file (same object shape under `proposals[]` with `status:"pending"`).
+
+Admins open **回饋／回報 → 分類審批**:
+- **通過** → `approveClassificationProposal` patches only the listed fields on the shared bank under lock, then **removes** the staging row. If any targeted field already has values **or** `reviewedByAI === 'Y'`, the API returns `needsConfirm: true`; the UI asks for overwrite and re-calls with `confirmOverwrite: true`.
+- **拒絕** → `rejectClassificationProposal` removes the staging row only.
+- Bulk approve / reject mirror 分題審批.
+
+Redeploy Apps Script after merge (paste `apps-script/Code.gs` → New version, same `/exec`). Coordinate empty staging file with **econ-database-data** (`shared/data/classification-proposals.json`).
 
 ## 批量編輯 / Bulk edit (admin mode)
 
@@ -147,7 +176,7 @@ When `accessRights.admin === true`, 特徵 also offers **題目空白** / **答�
 
 ### schemaVersion (shared bank)
 
-Shared bank JSON (`shared/data/database.json`) carries an integer root field `schemaVersion` (client constant `SCHEMA_VERSION` in `js/constants.js`, helpers in `js/schema-version.js`). Bump only when the data shape changes so an older writer would drop fields. **Missing `schemaVersion` is treated as `0`** (banks written before this guard). Distinct from export metadata `version: '1.0'`. Current client stamp: **5**.
+Shared bank JSON (`shared/data/database.json`) carries an integer root field `schemaVersion` (client constant `SCHEMA_VERSION` in `js/constants.js`, helpers in `js/schema-version.js`). Bump only when the data shape changes so an older writer would drop fields. **Missing `schemaVersion` is treated as `0`** (banks written before this guard). Distinct from export metadata `version: '1.0'`. Current client stamp: **8** (v8 = 分類提案 staging).
 
 | Version | Shape change |
 | --- | --- |
@@ -155,6 +184,9 @@ Shared bank JSON (`shared/data/database.json`) carries an integer root field `sc
 | 3 | AI解釋 side-file contract (`shared/data/ai-explanations.json`); legacy `AIExplanation` URL ignored |
 | 4 | `partsStatus` `pending` \| `none` \| `filled` |
 | 5 | 回報問題 side-file contract (`shared/data/issue-reports.json`) |
+| 6 | issue-reports + AI解釋 feedback `status` (open\|resolved) |
+| 7 | 分題提案 staging (`shared/data/question-parts-proposals.json`) |
+| 8 | 分類提案 staging (`shared/data/classification-proposals.json`; concepts / stemPatterns; pause ≥200) |
 
 - **Upload / auto-sync:** before `syncDataUpload`, the client reads the cloud file and **blocks** if local `SCHEMA_VERSION` &lt; cloud `schemaVersion`, with a Traditional Chinese error (cloud written by a newer app — update before uploading). No merge that strips unknown fields. **Apps Script `handleGitUpload_` enforces the same gate** (`schema_version_stale` + client/cloud versions) and preserves `schemaVersion` / unknown top-level keys on write. Redeploy `Code.gs` after that change.
 - **Load / download / file import:** if cloud/file `schemaVersion` &gt; local, show a **warning notification** asking the user to update. If the payload has no usable `questions` array, the load fails clearly instead of half-importing. `syncDataDownload` returns `schemaVersion` for client notify.

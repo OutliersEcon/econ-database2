@@ -5,7 +5,7 @@
 
 // Printed when the page loads. Bump this on every change so a reader can
 // tell whether the open tab is current. Do not keep a changelog here.
-const APP_VERSION = '2026.10.13.09';
+const APP_VERSION = '2026.10.13.10';
 console.log('Question bank version:', APP_VERSION);
 
 // Integer stamped on shared bank JSON as schemaVersion. Also an app-capability
@@ -19,9 +19,10 @@ console.log('Question bank version:', APP_VERSION);
 // v5: 回報問題 side-file (shared/data/issue-reports.json).
 // v6: issue-reports + AI解釋 feedback `status` (open|resolved); AS upload field schema.
 // v7: 分題提案 staging (shared/data/question-parts-proposals.json); approve patches bank.
+// v8: 分類提案 staging (shared/data/classification-proposals.json; concepts / stemPatterns; pause≥200).
 // data-checks.json is intentionally not reflected here.
 // Redeploy Apps Script after pulling this client (upload validation + hub status APIs).
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 
 // Question-number slider (last digits of the id, e.g. …-01 → 1)
 const QUESTION_NUMBER_RANGE = {
