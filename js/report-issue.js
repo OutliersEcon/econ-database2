@@ -131,6 +131,66 @@
         promise.catch(function () {});
     }
 
+    function cloneJson(value) {
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch (ignore) {
+            return value;
+        }
+    }
+
+    async function revertLocalBankFromUndo(undoSnap, kind) {
+        if (!undoSnap || !undoSnap.questionId) return;
+        if (!global.storage || typeof global.storage.getAllQuestions !== 'function') return;
+        if (typeof global.storage.updateQuestion !== 'function') return;
+        try {
+            var all = await global.storage.getAllQuestions();
+            var qid = String(undoSnap.questionId);
+            var live = null;
+            for (var i = 0; i < (all || []).length; i++) {
+                if (all[i] && String(all[i].id) === qid) {
+                    live = all[i];
+                    break;
+                }
+            }
+            if (!live) return;
+            if (kind === 'parts') {
+                if (typeof global.applyPartsFields !== 'function') return;
+                var parts = Array.isArray(undoSnap.questionParts) ? undoSnap.questionParts : [];
+                var status = undoSnap.partsStatus
+                    || (parts.length ? 'filled' : 'none');
+                global.applyPartsFields(live, parts, status);
+            } else if (kind === 'class') {
+                var values = undoSnap.values || {};
+                var fields = Array.isArray(undoSnap.fields) ? undoSnap.fields : Object.keys(values);
+                fields.forEach(function (field) {
+                    if (!isAllowedClassField(field)) return;
+                    var kindField = classFieldKind(field);
+                    if (kindField === 'parts') {
+                        if (typeof global.applyPartsFields === 'function') {
+                            var p = Array.isArray(values[field]) ? values[field] : [];
+                            global.applyPartsFields(live, p, p.length ? 'filled' : 'none');
+                        } else {
+                            live.questionParts = Array.isArray(values[field]) ? values[field].slice() : [];
+                            live.partsStatus = live.questionParts.length ? 'filled' : 'none';
+                        }
+                        return;
+                    }
+                    if (kindField === 'scalar') {
+                        live[field] = values[field] == null ? '' : String(values[field]);
+                        return;
+                    }
+                    live[field] = Array.isArray(values[field]) ? values[field].slice() : [];
+                });
+            } else {
+                return;
+            }
+            await global.storage.updateQuestion(live);
+            if (typeof populateDynamicFilters === 'function') populateDynamicFilters();
+            if (typeof renderQuestions === 'function') renderQuestions();
+        } catch (ignore) {}
+    }
+
     var PENDING_DB_NAME = 'EconFeedbackHubPending';
     var PENDING_DB_VERSION = 1;
     var PENDING_STORE = 'ops';
@@ -306,6 +366,18 @@
                         flushPendingOps({ reason: 'manual' }).catch(function () {});
                     });
                 }
+                var reviewExisting = chip.querySelector('#staging-pending-review-btn');
+                if (reviewExisting) {
+                    reviewExisting.addEventListener('click', function () {
+                        openPendingQueuePanel();
+                    });
+                }
+                var labelExisting = chip.querySelector('#staging-pending-chip-label');
+                if (labelExisting) {
+                    labelExisting.addEventListener('click', function () {
+                        openPendingQueuePanel();
+                    });
+                }
             }
             return chip;
         }
@@ -315,13 +387,27 @@
         chip.hidden = true;
         chip.setAttribute('role', 'status');
         chip.innerHTML = ''
-            + '<span class="staging-pending-chip-label" id="staging-pending-chip-label">待上傳審批 0</span>'
+            + '<button type="button" class="staging-pending-chip-label" id="staging-pending-chip-label"'
+            + ' title="檢視待上傳佇列">待上傳審批 0</button>'
+            + '<button type="button" class="btn btn-secondary btn-sm" id="staging-pending-review-btn">檢視佇列</button>'
             + '<button type="button" class="btn btn-primary btn-sm" id="staging-pending-flush-btn">立即上傳</button>';
         chip.dataset.bound = '1';
         var flushBtn = chip.querySelector('#staging-pending-flush-btn');
         flushBtn.addEventListener('click', function () {
             flushPendingOps({ reason: 'manual' }).catch(function () {});
         });
+        var reviewBtn = chip.querySelector('#staging-pending-review-btn');
+        if (reviewBtn) {
+            reviewBtn.addEventListener('click', function () {
+                openPendingQueuePanel();
+            });
+        }
+        var labelBtn = chip.querySelector('#staging-pending-chip-label');
+        if (labelBtn) {
+            labelBtn.addEventListener('click', function () {
+                openPendingQueuePanel();
+            });
+        }
         if (hubBtn && hubBtn.parentNode === host) {
             host.insertBefore(chip, hubBtn.nextSibling);
         } else {
@@ -349,9 +435,14 @@
                 btn.disabled = false;
                 btn.textContent = '立即上傳';
             }
+            var emptyOverlay = document.getElementById('staging-pending-queue-overlay');
+            if (emptyOverlay && !emptyOverlay.hidden) {
+                renderPendingQueuePanel();
+            }
             return;
         }
         chip.hidden = false;
+        var reviewBtn = document.getElementById('staging-pending-review-btn');
         if (hubState.flushing) {
             chip.classList.add('is-flushing');
             chip.classList.remove('is-error');
@@ -360,8 +451,10 @@
                 btn.disabled = true;
                 btn.textContent = '上傳中';
             }
+            if (reviewBtn) reviewBtn.disabled = true;
             return;
         }
+        if (reviewBtn) reviewBtn.disabled = false;
         chip.classList.remove('is-flushing');
         if (lastFlushError) {
             chip.classList.add('is-error');
@@ -382,6 +475,219 @@
             btn.disabled = false;
             btn.textContent = '立即上傳';
         }
+    }
+
+    function pendingOpKindLabel(kind) {
+        return kind === 'parts' ? '分題' : (kind === 'class' ? '分類' : String(kind || ''));
+    }
+
+    function pendingOpActionLabel(op) {
+        if (!op) return '';
+        if (op.op === 'approve') return '通過';
+        if (op.op === 'reject') {
+            if (op.kind === 'class' && Array.isArray(op.rejectFields) && op.rejectFields.length) {
+                return '保留原值';
+            }
+            return '拒絕';
+        }
+        return String(op.op || '');
+    }
+
+    function pendingOpPreviewText(op) {
+        if (!op) return '';
+        try {
+            if (op.kind === 'parts') {
+                var parts = (op.bankSnap && op.bankSnap.questionParts)
+                    || (op.proposalSnap && op.proposalSnap.questionParts)
+                    || [];
+                return formatPartsPreview(parts);
+            }
+            if (op.kind === 'class' && op.op === 'approve') {
+                var fields = Array.isArray(op.approveFields) ? op.approveFields : [];
+                var values = op.values || {};
+                if (!fields.length) return '（無欄位）';
+                return fields.map(function (f) {
+                    return classFieldLabel(f) + '：' + formatClassList(values[f]);
+                }).join('；');
+            }
+            if (op.kind === 'class' && op.op === 'reject') {
+                if (Array.isArray(op.rejectFields) && op.rejectFields.length) {
+                    return '保留：' + op.rejectFields.map(classFieldLabel).join('、');
+                }
+                return '全部保留原值／移除提案';
+            }
+        } catch (ignore) {}
+        return '';
+    }
+
+    function restoreProposalFromOp(op) {
+        if (!op || !op.proposalSnap || !op.proposalSnap.id) {
+            return false;
+        }
+        var snap = cloneJson(op.proposalSnap);
+        var id = String(snap.id || op.proposalId || '');
+        if (!id) return false;
+        if (op.kind === 'parts') {
+            var partsList = (hubState.partsRows || []).filter(function (item) {
+                return !(item && String(item.id) === id);
+            });
+            partsList.unshift(snap);
+            hubState.partsRows = partsList;
+            return true;
+        }
+        if (op.kind === 'class') {
+            var found = false;
+            hubState.classRows = (hubState.classRows || []).map(function (item) {
+                if (!item || String(item.id) !== id) return item;
+                found = true;
+                return snap;
+            });
+            if (!found) {
+                hubState.classRows = (hubState.classRows || []).concat([snap]);
+            }
+            hubState.classPendingCount = (hubState.classRows || []).length;
+            return true;
+        }
+        return false;
+    }
+
+    async function revokePendingOp(localId) {
+        var id = String(localId || '');
+        if (!id || hubState.flushing) return false;
+        var op = null;
+        for (var i = 0; i < (hubState.pendingOps || []).length; i++) {
+            if (hubState.pendingOps[i] && String(hubState.pendingOps[i].localId) === id) {
+                op = hubState.pendingOps[i];
+                break;
+            }
+        }
+        if (!op) return false;
+        removePendingOp(id);
+        if (op.op === 'approve' && op.undoBankSnap) {
+            scheduleLocalBankApply(revertLocalBankFromUndo(op.undoBankSnap, op.kind));
+        }
+        var restored = restoreProposalFromOp(op);
+        if (!restored) {
+            try {
+                await ensureStagingCache(true);
+            } catch (ignore) {}
+        } else {
+            // Re-apply remaining pending ops onto hub lists (hide still-queued proposals).
+            applyPendingOpsToLoadedRows();
+        }
+        if (hubOverlay && !hubOverlay.hidden) {
+            renderHubList();
+            syncHubChrome();
+            syncBulkButton();
+        }
+        refreshQuestionCardStaging(op.questionId);
+        maybeRefreshPendingStagingFilter();
+        updatePendingFlushChip();
+        renderPendingQueuePanel();
+        showCardStagingToast(
+            '已撤銷本機佇列：' + String(op.questionId || '')
+            + '（' + pendingOpKindLabel(op.kind) + '／' + pendingOpActionLabel(op) + '）'
+        );
+        return true;
+    }
+
+    function ensurePendingQueuePanel() {
+        var overlay = document.getElementById('staging-pending-queue-overlay');
+        if (overlay) return overlay;
+        overlay = document.createElement('div');
+        overlay.id = 'staging-pending-queue-overlay';
+        overlay.className = 'staging-pending-queue-overlay report-issue-overlay';
+        overlay.hidden = true;
+        overlay.innerHTML = ''
+            + '<div class="staging-pending-queue-dialog report-issue-dialog" role="dialog"'
+            + ' aria-modal="true" aria-labelledby="staging-pending-queue-title">'
+            + '<div class="report-issue-header">'
+            + '<div><h2 id="staging-pending-queue-title">待上傳審批佇列</h2>'
+            + '<p class="report-issue-subtitle">尚未同步至雲端的本機通過／拒絕。可逐項撤銷後再上傳。</p></div>'
+            + '<button type="button" class="report-issue-close" id="staging-pending-queue-close"'
+            + ' aria-label="關閉">×</button>'
+            + '</div>'
+            + '<div class="staging-pending-queue-body" id="staging-pending-queue-body"></div>'
+            + '<div class="staging-pending-queue-footer">'
+            + '<button type="button" class="btn btn-secondary" id="staging-pending-queue-close-2">關閉</button>'
+            + '<button type="button" class="btn btn-primary" id="staging-pending-queue-flush">立即上傳</button>'
+            + '</div></div>';
+        document.body.appendChild(overlay);
+        overlay.addEventListener('click', function (ev) {
+            if (ev.target === overlay) closePendingQueuePanel();
+        });
+        var closeBtn = overlay.querySelector('#staging-pending-queue-close');
+        var closeBtn2 = overlay.querySelector('#staging-pending-queue-close-2');
+        if (closeBtn) closeBtn.addEventListener('click', closePendingQueuePanel);
+        if (closeBtn2) closeBtn2.addEventListener('click', closePendingQueuePanel);
+        var flushBtn = overlay.querySelector('#staging-pending-queue-flush');
+        if (flushBtn) {
+            flushBtn.addEventListener('click', function () {
+                closePendingQueuePanel();
+                flushPendingOps({ reason: 'manual' }).catch(function () {});
+            });
+        }
+        var body = overlay.querySelector('#staging-pending-queue-body');
+        if (body) {
+            body.addEventListener('click', function (ev) {
+                var btn = ev.target && ev.target.closest
+                    ? ev.target.closest('[data-action="revoke-pending"]')
+                    : null;
+                if (!btn) return;
+                var lid = btn.getAttribute('data-local-id');
+                if (!lid || hubState.flushing) return;
+                btn.disabled = true;
+                revokePendingOp(lid).catch(function () {
+                    btn.disabled = false;
+                });
+            });
+        }
+        return overlay;
+    }
+
+    function renderPendingQueuePanel() {
+        var body = document.getElementById('staging-pending-queue-body');
+        if (!body) return;
+        var ops = hubState.pendingOps || [];
+        if (!ops.length) {
+            body.innerHTML = '<p class="staging-pending-queue-empty">目前沒有待上傳項目。</p>';
+            return;
+        }
+        var html = '<ul class="staging-pending-queue-list">';
+        ops.forEach(function (op) {
+            if (!op || !op.localId) return;
+            var preview = pendingOpPreviewText(op);
+            html += '<li class="staging-pending-queue-item">'
+                + '<div class="staging-pending-queue-main">'
+                + '<div class="staging-pending-queue-meta">'
+                + '<strong>' + esc(String(op.questionId || '（無編號）')) + '</strong>'
+                + '<span class="staging-pending-queue-tag">' + esc(pendingOpKindLabel(op.kind)) + '</span>'
+                + '<span class="staging-pending-queue-tag">' + esc(pendingOpActionLabel(op)) + '</span>'
+                + '</div>'
+                + (preview
+                    ? '<div class="staging-pending-queue-preview">' + esc(preview) + '</div>'
+                    : '')
+                + '</div>'
+                + '<button type="button" class="btn btn-secondary btn-sm"'
+                + ' data-action="revoke-pending" data-local-id="' + esc(String(op.localId)) + '"'
+                + (hubState.flushing ? ' disabled' : '')
+                + '>撤銷</button>'
+                + '</li>';
+        });
+        html += '</ul>';
+        body.innerHTML = html;
+    }
+
+    function openPendingQueuePanel() {
+        if (!hasAdminAccess()) return;
+        var overlay = ensurePendingQueuePanel();
+        renderPendingQueuePanel();
+        overlay.hidden = false;
+    }
+
+    function closePendingQueuePanel() {
+        var overlay = document.getElementById('staging-pending-queue-overlay');
+        if (overlay) overlay.hidden = true;
     }
 
     function notifyFlushStatus(text, kind, reason) {
@@ -563,6 +869,37 @@
         return Promise.resolve({ ok: false, error: 'bad_request' });
     }
 
+    function logFlushOpFailure(op, message, data, reason, err) {
+        var details = {
+            questionId: op && op.questionId,
+            kind: op && op.kind,
+            op: op && op.op,
+            proposalId: op && op.proposalId,
+            localId: op && op.localId,
+            message: message,
+            flushReason: reason
+        };
+        if (data && typeof data === 'object') {
+            details.raw = {
+                ok: data.ok,
+                error: data.error,
+                message: data.message,
+                needsConfirm: data.needsConfirm
+            };
+        }
+        if (err) {
+            details.error = err;
+            details.errorCode = err && err.code;
+        }
+        console.error('[審批同步失敗]', details);
+    }
+
+    function marksMismatchHintForMessage(msg) {
+        var s = String(msg || '');
+        if (s.indexOf('分題分數合計') === -1 && s.indexOf('與總分') === -1) return '';
+        return '（總分為 0 不會自動合計；請先把雲端題庫總分改成與分題一致，或清空總分後再上傳）';
+    }
+
     async function flushPendingOps(options) {
         options = options || {};
         var reason = options.reason || 'hub';
@@ -579,7 +916,7 @@
         updatePendingFlushChip();
         var total = ops.length;
         var done = 0;
-        var failedMsg = '';
+        var failedList = [];
         notifyFlushStatus('正在同步至雲端（0／' + total + '）…', 'info', reason);
         try {
             for (var i = 0; i < ops.length; i++) {
@@ -591,8 +928,13 @@
                         return executePendingOp(op);
                     });
                 } catch (err) {
-                    failedMsg = errorMessage(err && err.code);
-                    break;
+                    var catchMsg = errorMessage(err && err.code);
+                    logFlushOpFailure(op, catchMsg, null, reason, err);
+                    failedList.push({
+                        questionId: String(op.questionId || ''),
+                        message: catchMsg
+                    });
+                    continue;
                 }
                 if (data && data.needsConfirm === true && op.confirmOverwrite !== true) {
                     var confirmOk = global.confirm
@@ -602,8 +944,14 @@
                         )
                         : false;
                     if (!confirmOk) {
-                        failedMsg = '已取消覆寫；未完成項目仍保留本機。';
-                        break;
+                        // Prefer skip this op and continue; leave it in pendingOps.
+                        var cancelMsg = '已取消覆寫';
+                        logFlushOpFailure(op, cancelMsg, data, reason, null);
+                        failedList.push({
+                            questionId: String(op.questionId || ''),
+                            message: cancelMsg
+                        });
+                        continue;
                     }
                     op.confirmOverwrite = true;
                     persistPendingOps();
@@ -612,8 +960,13 @@
                             return executePendingOp(op);
                         });
                     } catch (err2) {
-                        failedMsg = errorMessage(err2 && err2.code);
-                        break;
+                        var catchMsg2 = errorMessage(err2 && err2.code);
+                        logFlushOpFailure(op, catchMsg2, null, reason, err2);
+                        failedList.push({
+                            questionId: String(op.questionId || ''),
+                            message: catchMsg2
+                        });
+                        continue;
                     }
                 }
                 if (data && data.error === 'blank_only_filled') {
@@ -625,9 +978,14 @@
                     continue;
                 }
                 if (!data || data.ok !== true) {
-                    failedMsg = (data && data.message && String(data.message))
+                    var failMsg = (data && data.message && String(data.message))
                         || errorMessage(data && data.error);
-                    break;
+                    logFlushOpFailure(op, failMsg, data, reason, null);
+                    failedList.push({
+                        questionId: String(op.questionId || ''),
+                        message: failMsg
+                    });
+                    continue;
                 }
                 if (data.question) {
                     if (op.kind === 'parts') {
@@ -640,14 +998,33 @@
                 done += 1;
                 notifyFlushStatus('正在同步至雲端（' + done + '／' + total + '）…', 'info', reason);
             }
-            if (failedMsg) {
-                lastFlushError = failedMsg;
-                notifyFlushStatus(
-                    '同步失敗（已完成 ' + done + '／' + total + '）：' + failedMsg
-                    + '。未完成項目仍保留本機，可按「立即上傳」重試。',
-                    'error',
-                    reason
-                );
+            if (failedList.length) {
+                var firstFail = failedList[0];
+                var firstMsg = firstFail && firstFail.message ? String(firstFail.message) : '';
+                var failCount = failedList.length;
+                var marksHint = marksMismatchHintForMessage(firstMsg);
+                lastFlushError = firstMsg;
+                console.error('[審批同步失敗] 摘要', {
+                    reason: reason,
+                    done: done,
+                    total: total,
+                    failedCount: failCount,
+                    failures: failedList
+                });
+                var toastMsg;
+                if (done > 0) {
+                    toastMsg = '同步部分完成（已完成 ' + done + '／' + total + '）：失敗 '
+                        + failCount + ' 項仍保留本機。首項：' + firstMsg
+                        + marksHint + '。可按「立即上傳」重試。';
+                } else if (failCount > 1) {
+                    toastMsg = '同步失敗（已完成 0／' + total + '）：失敗 '
+                        + failCount + ' 項仍保留本機。首項：' + firstMsg
+                        + marksHint + '。可按「立即上傳」重試。';
+                } else {
+                    toastMsg = '同步失敗（已完成 0／' + total + '）：' + firstMsg
+                        + marksHint + '。未完成項目仍保留本機，可按「立即上傳」重試。';
+                }
+                notifyFlushStatus(toastMsg, 'error', reason);
                 return false;
             }
             lastFlushError = '';
@@ -2009,13 +2386,24 @@
             questionId: String(row.questionId || ''),
             questionParts: Array.isArray(row.questionParts) ? row.questionParts.slice() : []
         };
+        var undoBankSnap = {
+            questionId: String(row.questionId || ''),
+            questionParts: live && Array.isArray(live.questionParts)
+                ? cloneJson(live.questionParts)
+                : [],
+            partsStatus: live
+                ? String(live.partsStatus || (bankHasFilledPartsLocal(live) ? 'filled' : 'none'))
+                : 'none'
+        };
         enqueuePendingOp({
             kind: 'parts',
             op: 'approve',
             proposalId: actionId,
             questionId: String(row.questionId || ''),
             confirmOverwrite: confirmOverwrite,
-            bankSnap: bankSnap
+            bankSnap: bankSnap,
+            undoBankSnap: undoBankSnap,
+            proposalSnap: cloneJson(row)
         });
         hubState.partsRows = (hubState.partsRows || []).filter(function (item) {
             return !(item && String(item.id) === actionId);
@@ -2057,7 +2445,8 @@
             kind: 'parts',
             op: 'reject',
             proposalId: actionId,
-            questionId: String(row.questionId || '')
+            questionId: String(row.questionId || ''),
+            proposalSnap: cloneJson(row)
         });
         hubState.partsRows = (hubState.partsRows || []).filter(function (item) {
             return !(item && String(item.id) === actionId);
@@ -2394,6 +2783,21 @@
             fields: approveFields.slice(),
             values: values
         };
+        var undoValues = {};
+        approveFields.forEach(function (field) {
+            if (live && Object.prototype.hasOwnProperty.call(live, field)) {
+                undoValues[field] = cloneJson(live[field]);
+            } else if (row.currentValues && Object.prototype.hasOwnProperty.call(row.currentValues, field)) {
+                undoValues[field] = cloneJson(row.currentValues[field]);
+            } else {
+                undoValues[field] = classFieldKind(field) === 'list' ? [] : '';
+            }
+        });
+        var undoBankSnap = {
+            questionId: String(row.questionId || ''),
+            fields: approveFields.slice(),
+            values: undoValues
+        };
         enqueuePendingOp({
             kind: 'class',
             op: 'approve',
@@ -2403,7 +2807,9 @@
             values: values,
             confirmOverwrite: confirmOverwrite,
             proposalRemaining: remaining,
-            bankSnap: bankSnap
+            bankSnap: bankSnap,
+            undoBankSnap: undoBankSnap,
+            proposalSnap: cloneJson(row)
         });
         applyClassProposalRemaining(actionId, remaining);
         scheduleLocalBankApply(applyApprovedClassificationLocally(bankSnap));
@@ -2454,7 +2860,8 @@
             proposalId: actionId,
             questionId: String(row.questionId || ''),
             rejectFields: partial ? rejectFields.slice() : [],
-            proposalRemaining: remaining
+            proposalRemaining: remaining,
+            proposalSnap: cloneJson(row)
         });
         applyClassProposalRemaining(actionId, remaining);
         setHubBanner(
@@ -2751,7 +3158,9 @@
         ensureStagingCache: ensureStagingCache,
         handleCardStagingAction: handleCardStagingAction,
         flushPendingOps: flushPendingOps,
-        updatePendingFlushChip: updatePendingFlushChip
+        updatePendingFlushChip: updatePendingFlushChip,
+        openPendingQueuePanel: openPendingQueuePanel,
+        revokePendingOp: revokePendingOp
     };
     global.openReportIssueModal = openReportModal;
     global.initReportIssueFeature = initReportIssueFeature;
