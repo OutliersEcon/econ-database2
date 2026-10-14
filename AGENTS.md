@@ -36,7 +36,7 @@
 
 | 路徑 | 範圍 |
 | --- | --- |
-| [`js/report-issue.kb.md`](js/report-issue.kb.md) | 回饋／回報 hub：local-first；關窗立即 hide + 背景 flush（.36）；題目卡 ✓／✕（.30）+ 提案預覽（.33）；外層跟「自動同步」`readAutoSync`／chip（.31）；flush 跳過失敗＋`console.error`（.34）；待上傳佇列檢視／撤銷（.35） |
+| [`js/report-issue.kb.md`](js/report-issue.kb.md) | 回饋／回報 hub：local-first；關窗立即 hide + 背景 flush（.36）；批次 validate-then-commit flush（.37）；題目卡 ✓／✕（.30）+ 提案預覽（.33）；外層跟「自動同步」`readAutoSync`／chip（.31）；flush 跳過失敗＋`console.error`（.34）；待上傳佇列檢視／撤銷（.35） |
 | [`js/filters.kb.md`](js/filters.kb.md) | 題目篩選；特徵 vs admin「空白／缺漏」（含有未審批事項）；考生表現 |
 | [`js/github-sync.kb.md`](js/github-sync.kb.md) | 題庫 load／save、shards、dirty upload、schemaVersion |
 | [`js/ai-explanation.kb.md`](js/ai-explanation.kb.md) | AI解釋 side-file；`accessRights.ai`；Poe proxy |
@@ -73,7 +73,7 @@
 | 特徵「有分題」 | 特徵內 **只有**「有分題」；「沒有分題」不在 `FEATURE_ITEMS`（狀態用 `partsStatus`／admin 空白） |
 | 空白／缺漏 | admin-only `ADMIN_BLANK_FEATURE_ITEMS`，**不** 併入特徵 |
 | UI「考生表現」 | 原「分題表現」改名；storage keys 不變（`partPerformance`） |
-| Approve unlock | Hub：pendingOps＋關窗立即 hide＋背景 flush（.36）。題目 tab：跟 `readAutoSync` 即時 flush 或留 queue＋「立即上傳」chip；`beforeunload` 有 pending 時 |
+| Approve unlock | Hub：pendingOps＋關窗立即 hide＋背景 flush（.36）；`.37` `flushStagingApprovals` 批次寫入。題目 tab：跟 `readAutoSync` 即時 flush 或留 queue＋「立即上傳」chip；`beforeunload` 有 pending 時 |
 | HKEAA vs 雅集 | 可分屬不同 shard 檔 |
 | PR 流程 | OutliersEcon 推 branch；mas-repo merge |
 

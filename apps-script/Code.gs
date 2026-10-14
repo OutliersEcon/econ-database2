@@ -154,6 +154,7 @@
  *   bulkApproveClassificationProposals → handleBulkApproveClassificationProposals_ (admin; bank patch)
  *   rejectClassificationProposal      → handleRejectClassificationProposal_      (admin; optional rejectFields keeps other fields)
  *   bulkRejectClassificationProposals → handleBulkRejectClassificationProposals_ (admin)
+ *   flushStagingApprovals             → handleFlushStagingApprovals_             (admin; validate-all then one write/file)
  * Personal user settings (users/<username>/settings.json; known user; not bank SCHEMA):
  *   getUserSettings  → handleGetUserSettings_
  *   saveUserSettings → handleSaveUserSettings_
@@ -272,6 +273,7 @@ function handlePost_(e) {
   if (action === 'bulkApproveClassificationProposals') return handleBulkApproveClassificationProposals_(body);
   if (action === 'rejectClassificationProposal') return handleRejectClassificationProposal_(body);
   if (action === 'bulkRejectClassificationProposals') return handleBulkRejectClassificationProposals_(body);
+  if (action === 'flushStagingApprovals') return handleFlushStagingApprovals_(body);
   if (action === 'getUserSettings') return handleGetUserSettings_(body);
   if (action === 'saveUserSettings') return handleSaveUserSettings_(body);
   if (action === 'reviewStemPatterns') return handleReviewStemPatterns_(body);
@@ -4233,6 +4235,615 @@ function handleRejectClassificationProposal_(body) {
 var USER_SETTINGS_REL_NAME_ = 'settings.json';
 var USER_SETTINGS_MAX_BYTES_ = 80000;
 var USER_SETTINGS_SCHEMA_VERSION_ = 1;
+
+// --- flushStagingApprovals: validate-all then one write per file ---
+// Cap keeps Apps Script under time/size limits; client chunks remaining.
+// One batch uses one git slot + one script lock (not one per op).
+var FLUSH_STAGING_APPROVALS_MAX_OPS_ = 50;
+
+/**
+ * Mixed parts+class approve/reject flush.
+ * Body: { ops: [{ localId, kind:'parts'|'class', op:'approve'|'reject',
+ *   proposalId, questionId, confirmOverwrite?, approveFields?, values?, rejectFields? }] }
+ * Validate all → apply okToApply in memory → write bank once (via writeSharedBankForPartsApprove_)
+ * + parts proposals + class proposals as needed. needsConfirm without confirmOverwrite → skip.
+ * Proposal already gone → noop success (idempotent). marks=0 is valid (blank/null auto-sums).
+ */
+function handleFlushStagingApprovals_(body) {
+  var username = normalizeUsername_(body.username);
+  if (!username || !lookupRights_(username).admin) return { ok: false, error: 'feature_unavailable' };
+
+  var rawOps = Array.isArray(body.ops) ? body.ops : [];
+  if (!rawOps.length) return { ok: false, error: 'bad_request', message: '沒有待同步項目。' };
+  if (rawOps.length > FLUSH_STAGING_APPROVALS_MAX_OPS_) {
+    return {
+      ok: false,
+      error: 'batch_too_large',
+      message: '單批最多 ' + FLUSH_STAGING_APPROVALS_MAX_OPS_
+        + ' 項（收到 ' + rawOps.length + '）。請分批同步其餘項目。',
+      maxBatch: FLUSH_STAGING_APPROVALS_MAX_OPS_,
+      received: rawOps.length
+    };
+  }
+
+  var cfg = githubConfig_();
+  if (!githubDataReady_(cfg) || !githubSharedBankPath_(cfg)) {
+    return gitClientError_('github_not_configured');
+  }
+
+  if (!takeGitSlot_(username, 8)) return gitClientError_('rate_limited');
+  var lock = LockService.getScriptLock();
+  var held = false;
+  try {
+    if (!lock.tryLock(25000)) {
+      releaseGitSlot_(username);
+      return gitClientError_('rate_limited');
+    }
+    held = true;
+
+    var needParts = false;
+    var needClass = false;
+    var needBank = false;
+    var normalized = [];
+    var ni;
+    for (ni = 0; ni < rawOps.length; ni++) {
+      var raw = rawOps[ni];
+      if (!raw || typeof raw !== 'object') continue;
+      var kind = String(raw.kind || '').trim();
+      var opName = String(raw.op || '').trim();
+      if ((kind !== 'parts' && kind !== 'class') || (opName !== 'approve' && opName !== 'reject')) {
+        normalized.push({
+          localId: String(raw.localId || ''),
+          kind: kind,
+          op: opName,
+          proposalId: String(raw.proposalId || raw.id || '').trim(),
+          questionId: String(raw.questionId || '').trim(),
+          _invalid: true
+        });
+        continue;
+      }
+      if (kind === 'parts') needParts = true;
+      if (kind === 'class') needClass = true;
+      if (opName === 'approve') needBank = true;
+      var confirmOverwrite = raw.confirmOverwrite === true
+        || raw.confirmOverwrite === 'true'
+        || raw.confirmOverwrite === 1;
+      normalized.push({
+        localId: String(raw.localId || ''),
+        kind: kind,
+        op: opName,
+        proposalId: String(raw.proposalId || raw.id || '').trim(),
+        questionId: String(raw.questionId || '').trim(),
+        confirmOverwrite: confirmOverwrite,
+        approveFields: Array.isArray(raw.approveFields) ? raw.approveFields : null,
+        rejectFields: Array.isArray(raw.rejectFields) ? raw.rejectFields : null,
+        values: raw.values && typeof raw.values === 'object' ? raw.values : null
+      });
+    }
+
+    var partsLoaded = null;
+    var classLoaded = null;
+    var bankLoaded = null;
+    if (needParts) partsLoaded = readQuestionPartsProposalsStore_(cfg);
+    if (needClass) classLoaded = readClassificationProposalsStore_(cfg);
+    if (needBank) bankLoaded = readSharedBankForPartsApprove_(cfg);
+
+    var results = [];
+    var applyPlans = [];
+    var partsStoreDirty = false;
+    var classStoreDirty = false;
+    var bankDirty = false;
+
+    function pushResult(item) {
+      results.push(item);
+    }
+
+    for (ni = 0; ni < normalized.length; ni++) {
+      var item = normalized[ni];
+      if (item._invalid) {
+        pushResult({
+          localId: item.localId,
+          kind: item.kind,
+          op: item.op,
+          proposalId: item.proposalId,
+          questionId: item.questionId,
+          status: 'failed',
+          error: 'bad_request',
+          message: '無效的同步項目。'
+        });
+        continue;
+      }
+      if (item.kind === 'parts' && item.op === 'approve') {
+        flushValidatePartsApprove_(item, partsLoaded, bankLoaded, applyPlans, pushResult);
+      } else if (item.kind === 'parts' && item.op === 'reject') {
+        flushValidatePartsReject_(item, partsLoaded, applyPlans, pushResult);
+      } else if (item.kind === 'class' && item.op === 'approve') {
+        flushValidateClassApprove_(item, classLoaded, bankLoaded, applyPlans, pushResult);
+      } else if (item.kind === 'class' && item.op === 'reject') {
+        flushValidateClassReject_(item, classLoaded, applyPlans, pushResult);
+      }
+    }
+
+    for (ni = 0; ni < applyPlans.length; ni++) {
+      var plan = applyPlans[ni];
+      if (plan.type === 'partsApprove') {
+        var liveP = bankLoaded.bank.questions[plan.qIndex];
+        liveP.questionParts = plan.parts;
+        liveP.partsStatus = 'filled';
+        if (plan.filledMarksFromParts) liveP.marks = plan.sum;
+        bankLoaded.bank.questions[plan.qIndex] = liveP;
+        bankDirty = true;
+        var foundP = findPartsProposal_(partsLoaded.store, plan.proposalId, plan.questionId);
+        if (foundP) {
+          removePartsProposalAt_(partsLoaded.store, foundP.index);
+          partsStoreDirty = true;
+        }
+        plan.result.question = publicBankPartsSnapshot_(liveP);
+        plan.result.removed = true;
+      } else if (plan.type === 'partsReject') {
+        var foundPR = findPartsProposal_(partsLoaded.store, plan.proposalId, plan.questionId);
+        if (foundPR) {
+          removePartsProposalAt_(partsLoaded.store, foundPR.index);
+          partsStoreDirty = true;
+        }
+        plan.result.removed = true;
+      } else if (plan.type === 'classApprove') {
+        if (plan.approveFields.length && plan.qIndex >= 0 && bankLoaded) {
+          var liveC = bankLoaded.bank.questions[plan.qIndex];
+          var fi;
+          for (fi = 0; fi < plan.approveFields.length; fi++) {
+            applyClassificationValueToQuestion_(
+              liveC,
+              plan.approveFields[fi],
+              plan.writeValues[plan.approveFields[fi]]
+            );
+          }
+          bankLoaded.bank.questions[plan.qIndex] = liveC;
+          bankDirty = true;
+          plan.result.question = publicBankClassificationSnapshot_(liveC, plan.approveFields);
+        }
+        if (classLoaded) {
+          var foundC = findClassificationProposal_(classLoaded.store, plan.proposalId, plan.questionId);
+          if (foundC) {
+            var dropFields = plan.approveFields.concat(plan.rejectFields || []);
+            var left = trimClassificationProposalFields_(foundC.proposal, dropFields);
+            var remaining = null;
+            if (left <= 0) {
+              removeClassificationProposalAt_(classLoaded.store, foundC.index);
+            } else {
+              classLoaded.store.proposals[foundC.index] = foundC.proposal;
+              remaining = publicClassificationProposalView_(foundC.proposal);
+            }
+            classStoreDirty = true;
+            plan.result.proposalRemaining = remaining;
+            plan.result.removed = left <= 0;
+          } else {
+            plan.result.removed = true;
+          }
+        }
+        plan.result.approvedFields = plan.approveFields;
+        plan.result.rejectedFields = plan.rejectFields || [];
+        plan.result.blockedFields = plan.blockedFields || [];
+      } else if (plan.type === 'classReject') {
+        var foundCR = findClassificationProposal_(classLoaded.store, plan.proposalId, plan.questionId);
+        if (foundCR) {
+          if (plan.rejectFields && plan.rejectFields.length) {
+            var leftR = trimClassificationProposalFields_(foundCR.proposal, plan.rejectFields);
+            var remR = null;
+            if (leftR <= 0) {
+              removeClassificationProposalAt_(classLoaded.store, foundCR.index);
+            } else {
+              classLoaded.store.proposals[foundCR.index] = foundCR.proposal;
+              remR = publicClassificationProposalView_(foundCR.proposal);
+            }
+            plan.result.proposalRemaining = remR;
+            plan.result.removed = leftR <= 0;
+            plan.result.rejectedFields = plan.rejectFields;
+          } else {
+            removeClassificationProposalAt_(classLoaded.store, foundCR.index);
+            plan.result.removed = true;
+            plan.result.proposalRemaining = null;
+          }
+          classStoreDirty = true;
+        } else {
+          plan.result.removed = true;
+        }
+      } else if (plan.type === 'classBlankOnly') {
+        var foundB = findClassificationProposal_(classLoaded.store, plan.proposalId, plan.questionId);
+        if (foundB) {
+          var leftB = trimClassificationProposalFields_(foundB.proposal, plan.dropFields);
+          var remB = null;
+          if (leftB <= 0) {
+            removeClassificationProposalAt_(classLoaded.store, foundB.index);
+          } else {
+            classLoaded.store.proposals[foundB.index] = foundB.proposal;
+            remB = publicClassificationProposalView_(foundB.proposal);
+          }
+          classStoreDirty = true;
+          plan.result.proposalRemaining = remB;
+          plan.result.removed = leftB <= 0;
+        } else {
+          plan.result.removed = true;
+        }
+        plan.result.blockedFields = plan.dropFields;
+        plan.result.blankOnlyFilled = true;
+      }
+    }
+
+    var bankSha = '';
+    var bankPath = '';
+    var partsSha = '';
+    var partsPath = '';
+    var classSha = '';
+    var classPath = '';
+    var gitWrites = 0;
+
+    if (bankDirty && bankLoaded) {
+      var bankWritten = writeSharedBankForPartsApprove_(
+        cfg,
+        bankLoaded.bank,
+        'Flush staging approvals (bank, ' + applyPlans.length + ' plans)'
+      );
+      bankSha = bankWritten.sha;
+      bankPath = bankWritten.path;
+      gitWrites += 1;
+    }
+    if (partsStoreDirty && partsLoaded) {
+      var partsWritten = writeQuestionPartsProposalsStore_(
+        cfg,
+        partsLoaded.store,
+        'Flush staging approvals (parts proposals)'
+      );
+      partsSha = partsWritten.sha;
+      partsPath = partsWritten.path;
+      gitWrites += 1;
+    }
+    if (classStoreDirty && classLoaded) {
+      var classWritten = writeClassificationProposalsStore_(
+        cfg,
+        classLoaded.store,
+        'Flush staging approvals (classification proposals)'
+      );
+      classSha = classWritten.sha;
+      classPath = classWritten.path;
+      gitWrites += 1;
+    }
+
+    lock.releaseLock();
+    held = false;
+
+    var summary = {
+      ok: 0,
+      noop: 0,
+      failed: 0,
+      needsConfirm: 0,
+      bankWritten: bankDirty,
+      partsProposalsWritten: partsStoreDirty,
+      classProposalsWritten: classStoreDirty,
+      gitWriteGroups: gitWrites
+    };
+    for (ni = 0; ni < results.length; ni++) {
+      var st = results[ni].status;
+      if (st === 'ok') summary.ok += 1;
+      else if (st === 'noop') summary.noop += 1;
+      else if (st === 'needsConfirm') summary.needsConfirm += 1;
+      else summary.failed += 1;
+    }
+
+    writeLog_({
+      username: username,
+      action: 'flushStagingApprovals',
+      success: true,
+      metadata: summary
+    }, true);
+
+    return {
+      ok: true,
+      action: 'flushStagingApprovals',
+      results: results,
+      summary: summary,
+      bankSha: bankSha,
+      bankPath: bankPath,
+      partsProposalsSha: partsSha,
+      partsProposalsPath: partsPath,
+      classProposalsSha: classSha,
+      classProposalsPath: classPath,
+      maxBatch: FLUSH_STAGING_APPROVALS_MAX_OPS_
+    };
+  } catch (err) {
+    if (held) {
+      try { lock.releaseLock(); } catch (ignore) {}
+      held = false;
+    }
+    safeLog_(err);
+    releaseGitSlot_(username);
+    var code = err && err.code ? err.code : 'github_error';
+    if (code === 'payload_too_large') return gitClientError_('payload_too_large');
+    if (code === 'github_not_found') return gitClientError_('github_not_found');
+    return gitClientError_('github_error');
+  }
+}
+
+function flushResultBase_(item, extra) {
+  var out = {
+    localId: item.localId,
+    kind: item.kind,
+    op: item.op,
+    proposalId: item.proposalId,
+    questionId: item.questionId
+  };
+  if (extra) {
+    var keys = Object.keys(extra);
+    for (var i = 0; i < keys.length; i++) out[keys[i]] = extra[keys[i]];
+  }
+  return out;
+}
+
+function flushValidatePartsApprove_(item, partsLoaded, bankLoaded, applyPlans, pushResult) {
+  var found = findPartsProposal_(partsLoaded.store, item.proposalId, item.questionId);
+  if (!found) {
+    pushResult(flushResultBase_(item, {
+      status: 'noop',
+      message: '提案已不存在（視為已完成）。'
+    }));
+    return;
+  }
+  var proposal = found.proposal;
+  var questionId = String(proposal.questionId || '').trim();
+  var parts = normalizeProposalParts_(proposal.questionParts);
+  item.proposalId = String(proposal.id || item.proposalId);
+  item.questionId = questionId;
+  if (!questionId || !parts.length) {
+    pushResult(flushResultBase_(item, {
+      status: 'failed',
+      error: 'bad_request',
+      message: '提案缺少有效分題。'
+    }));
+    return;
+  }
+  var qIndex = findBankQuestionIndex_(bankLoaded.bank, questionId);
+  if (qIndex < 0) {
+    pushResult(flushResultBase_(item, {
+      status: 'failed',
+      error: 'not_found',
+      message: '題庫找不到題目「' + questionId + '」'
+    }));
+    return;
+  }
+  var live = bankLoaded.bank.questions[qIndex];
+  if (bankQuestionHasFilledParts_(live) && !item.confirmOverwrite) {
+    pushResult(flushResultBase_(item, {
+      status: 'needsConfirm',
+      needsConfirm: true,
+      error: 'needs_confirm',
+      message: '題目已有分題資料，需確認覆寫後再同步。',
+      current: publicBankPartsSnapshot_(live),
+      proposed: {
+        questionId: questionId,
+        marks: live.marks,
+        partsStatus: 'filled',
+        questionParts: parts
+      }
+    }));
+    return;
+  }
+  var sumCheck = validateProposalPartsSum_(parts, live.marks, questionId);
+  if (!sumCheck.ok) {
+    pushResult(flushResultBase_(item, {
+      status: 'failed',
+      error: sumCheck.error || 'validation_failed',
+      message: sumCheck.message || ''
+    }));
+    return;
+  }
+  var result = flushResultBase_(item, { status: 'ok', needsConfirm: false });
+  applyPlans.push({
+    type: 'partsApprove',
+    proposalId: item.proposalId,
+    questionId: questionId,
+    qIndex: qIndex,
+    parts: parts,
+    sum: sumCheck.sum,
+    filledMarksFromParts: sumCheck.filledMarksFromParts === true,
+    result: result
+  });
+  pushResult(result);
+}
+
+function flushValidatePartsReject_(item, partsLoaded, applyPlans, pushResult) {
+  var found = findPartsProposal_(partsLoaded.store, item.proposalId, item.questionId);
+  if (!found) {
+    pushResult(flushResultBase_(item, {
+      status: 'noop',
+      message: '提案已不存在（視為已完成）。'
+    }));
+    return;
+  }
+  item.proposalId = String(found.proposal.id || item.proposalId);
+  item.questionId = String(found.proposal.questionId || item.questionId);
+  var result = flushResultBase_(item, { status: 'ok' });
+  applyPlans.push({
+    type: 'partsReject',
+    proposalId: item.proposalId,
+    questionId: item.questionId,
+    result: result
+  });
+  pushResult(result);
+}
+
+function flushValidateClassApprove_(item, classLoaded, bankLoaded, applyPlans, pushResult) {
+  var found = findClassificationProposal_(classLoaded.store, item.proposalId, item.questionId);
+  if (!found) {
+    pushResult(flushResultBase_(item, {
+      status: 'noop',
+      message: '提案已不存在（視為已完成）。'
+    }));
+    return;
+  }
+  var proposal = found.proposal;
+  var view = publicClassificationProposalView_(proposal);
+  var questionId = String(view && view.questionId || '').trim();
+  item.proposalId = String(proposal.id || item.proposalId);
+  item.questionId = questionId;
+  if (!questionId || !view.fields.length) {
+    pushResult(flushResultBase_(item, {
+      status: 'failed',
+      error: 'bad_request',
+      message: '提案缺少有效分類欄位。'
+    }));
+    return;
+  }
+  var fakeBody = {
+    approveFields: item.approveFields,
+    rejectFields: item.rejectFields,
+    values: item.values
+  };
+  var actions = resolveClassificationFieldActions_(fakeBody, view.fields);
+  var approveFields = actions.approveFields;
+  var rejectFields = actions.rejectFields;
+  if (!approveFields.length && !rejectFields.length) {
+    pushResult(flushResultBase_(item, {
+      status: 'failed',
+      error: 'bad_request',
+      message: '沒有指定要通過或保留原值的欄位。'
+    }));
+    return;
+  }
+
+  if (!approveFields.length) {
+    var resultRO = flushResultBase_(item, {
+      status: 'ok',
+      approvedFields: [],
+      rejectedFields: rejectFields
+    });
+    applyPlans.push({
+      type: 'classApprove',
+      proposalId: item.proposalId,
+      questionId: questionId,
+      qIndex: -1,
+      approveFields: [],
+      rejectFields: rejectFields,
+      writeValues: {},
+      blockedFields: [],
+      result: resultRO
+    });
+    pushResult(resultRO);
+    return;
+  }
+
+  var qIndex = findBankQuestionIndex_(bankLoaded.bank, questionId);
+  if (qIndex < 0) {
+    pushResult(flushResultBase_(item, {
+      status: 'failed',
+      error: 'not_found',
+      message: '題庫找不到題目「' + questionId + '」'
+    }));
+    return;
+  }
+  var live = bankLoaded.bank.questions[qIndex];
+  var blankSplit = partitionBlankOnlyApproveFields_(live, approveFields);
+  var blockedBlankOnly = blankSplit.blocked;
+  if (blockedBlankOnly.length) {
+    rejectFields = rejectFields.concat(blockedBlankOnly.filter(function (f) {
+      return rejectFields.indexOf(f) < 0;
+    }));
+    approveFields = blankSplit.allowed;
+  }
+  if (!approveFields.length) {
+    var resultBO = flushResultBase_(item, {
+      status: 'ok',
+      error: 'blank_only_filled',
+      blankOnlyFilled: true,
+      message: '空白才可寫入的欄位在題庫已有值，已略過：'
+        + blockedBlankOnly.map(classificationFieldLabel_).join('、'),
+      blockedFields: blockedBlankOnly,
+      rejectedFields: rejectFields
+    });
+    applyPlans.push({
+      type: 'classBlankOnly',
+      proposalId: item.proposalId,
+      questionId: questionId,
+      dropFields: rejectFields.slice(),
+      result: resultBO
+    });
+    pushResult(resultBO);
+    return;
+  }
+
+  var writeValues = classificationWriteValuesFromBody_(
+    { values: item.values || {} },
+    approveFields,
+    view.proposedValues
+  );
+  if (classificationNeedsOverwriteConfirm_(live, approveFields) && !item.confirmOverwrite) {
+    pushResult(flushResultBase_(item, {
+      status: 'needsConfirm',
+      needsConfirm: true,
+      error: 'needs_confirm',
+      message: bankQuestionReviewedByAi_(live)
+        ? '題目已標記 reviewedByAI=Y，需確認覆寫後再同步。'
+        : '題目已有分類資料，需確認覆寫後再同步。',
+      approveFields: approveFields,
+      rejectFields: rejectFields,
+      blockedFields: blockedBlankOnly,
+      current: publicBankClassificationSnapshot_(live, approveFields),
+      proposed: {
+        questionId: questionId,
+        fields: approveFields,
+        values: writeValues,
+        reason: view.reason,
+        confidence: view.confidence
+      },
+      reviewedByAI: String(live.reviewedByAI || '')
+    }));
+    return;
+  }
+
+  var result = flushResultBase_(item, {
+    status: 'ok',
+    needsConfirm: false,
+    approvedFields: approveFields,
+    rejectedFields: rejectFields,
+    blockedFields: blockedBlankOnly
+  });
+  applyPlans.push({
+    type: 'classApprove',
+    proposalId: item.proposalId,
+    questionId: questionId,
+    qIndex: qIndex,
+    approveFields: approveFields,
+    rejectFields: rejectFields,
+    writeValues: writeValues,
+    blockedFields: blockedBlankOnly,
+    result: result
+  });
+  pushResult(result);
+}
+
+function flushValidateClassReject_(item, classLoaded, applyPlans, pushResult) {
+  var found = findClassificationProposal_(classLoaded.store, item.proposalId, item.questionId);
+  if (!found) {
+    pushResult(flushResultBase_(item, {
+      status: 'noop',
+      message: '提案已不存在（視為已完成）。'
+    }));
+    return;
+  }
+  item.proposalId = String(found.proposal.id || item.proposalId);
+  item.questionId = String(found.proposal.questionId || item.questionId);
+  var rejectFields = normalizeClassificationFields_(item.rejectFields);
+  var result = flushResultBase_(item, { status: 'ok', rejectedFields: rejectFields });
+  applyPlans.push({
+    type: 'classReject',
+    proposalId: item.proposalId,
+    questionId: item.questionId,
+    rejectFields: rejectFields,
+    result: result
+  });
+  pushResult(result);
+}
+
+
 
 function githubUserSettingsPath_(username) {
   var segment = githubUserSegment_(username);

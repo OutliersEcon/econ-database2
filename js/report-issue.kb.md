@@ -55,7 +55,7 @@ sequenceDiagram
 | **題目 tab ✓／✕（hub 外）** | 同樣先 `enqueuePendingOp`（樂觀 UI）；之後跟 **`readAutoSync()`**（`econ_git_auto_sync`／header「自動同步」checkbox，同 `github-sync.js`） |
 | ↳ 自動同步 **開** | 即刻 `flushPendingOps({ reason: 'auto-sync' })`（經 `enqueueStagingWrite` 防 409）；**唔使開 hub** |
 | ↳ 自動同步 **關** | 留本機 queue；header chip「待上傳審批 N」＋「立即上傳」；或再開自動同步後下次外層操作／手動上傳 |
-| **兩者** | 有 unsynced pending → `beforeunload`；flush **跳過失敗繼續其餘**（.34）；失敗保留 pending＋`console.error`＋TC 錯誤／部分完成 toast＋chip 可重試；chip「檢視佇列」可撤銷單項（.35）；hub 關窗背景 flush（.36） |
+| **兩者** | 有 unsynced pending → `beforeunload`；flush **批次 validate-then-commit**（.37；≤50／批）＋跳過失敗（.34）；失敗／needsConfirm 保留 pending＋`console.error`＋toast＋chip；「檢視佇列」撤銷（.35）；hub 關窗背景 flush（.36） |
 
 ### 題目 tab 卡上 ✓／✕（`.30`／`.31`／`.33` preview）
 
@@ -94,6 +94,7 @@ sequenceDiagram
 | 題目卡審批 | **✓／✕ one-shot**（admin only） | 睇題時快批；邏輯同 hub queue |
 | 待上傳佇列檢視／撤銷（.35） | chip「檢視佇列」／點標籤開 panel；每列「撤銷」 | 上傳前可覆核；`removePendingOp`＋還原 staging＋undo 樂觀 bank |
 | flush 遇失敗 | **跳過該筆、繼續其餘**（.34）；取消覆寫 confirm 亦 skip＋continue | 避免首筆（如 marks=0）卡住整批 0／N |
+| flush 批次 validate-then-commit（.37） | **`flushStagingApprovals`** 一鎖一驗證；成功項一次寫檔；cap 50；needsConfirm skip 唔彈窗 | 10 審批 ≈ 1–3 commit groups；避免半寫 bank |
 | 失敗可觀測性 | 每筆 `console.error('[審批同步失敗]', …)`＋結束摘要 | toast  alone 難排查；DevTools 見 questionId／proposalId／raw |
 | 本機改題後仍失敗 | **預期**：flush 重送 staging `proposalId` approve，**不**帶本機編輯；server 比對提案分題合計 vs **雲端 bank** `marks`；`0` ≠ blank（blank 才自動合計） | 須改雲端總分或清空總分後再上傳；見下方「編輯仍失敗」 |
 
@@ -110,6 +111,49 @@ sequenceDiagram
 - **撤銷**：`removePendingOp(localId)`；若有 `proposalSnap` 則插回 `partsRows`／`classRows`，否則 `ensureStagingCache(true)` 由雲端重拉（提案尚未 flush 仍在 staging）；approve 若有 `undoBankSnap` 則還原本機樂觀題庫套用。
 - 撤銷後刷新 hub 列表（若開著）、題目卡 staging、chip；flush 中不可撤銷。
 
+
+## .37 批次 validate-then-commit（設計筆記／實作）
+
+### 思考過的邊界（實作前）
+
+| 議題 | 決定 |
+| --- | --- |
+| **混合 parts + class + reject** | 同一 `flushStagingApprovals`：lazy 載入所需 store；validate 全部 → 只 apply `okToApply` → 最多寫 bank 一次 + parts proposals 一次 + class proposals 一次 |
+| **併發第二次 flush** | 客戶端 `hubState.flushing` 擋；伺服器 `LockService` + `takeGitSlot_`（整批一個 slot，非每筆） |
+| **blank_only_filled / proposalRemaining** | 無可寫欄 → staging trim；`status:ok` + `blankOnlyFilled`；客戶端仍從 queue 移除（同 .34 行為） |
+| **needsConfirm** | **唔**喺 batch／hub-close 彈 confirm；skip + 留 pending + toast／`console.error`；enqueue 時已 confirm 則帶 `confirmOverwrite:true` |
+| **單筆 approve 路徑** | 保留既有 `approve*`／`reject*`（hub 一鍵仍入 queue）；flush 走 batch（含 batch-of-1）；舊 deployment 未知 action → sequential fallback |
+| **Apps Script 上限** | 伺服器 cap **50**（`batch_too_large`）；客戶端 chunk 其餘；一 batch ≈ 一個 git slot／lock 週期 |
+| **marks=0** | **唔**當 blank；`validateProposalPartsSum_`：只有 null／空字串才 auto-sum；0 必須與分題合計相符 |
+| **Idempotency** | 提案已不在 staging → `status:noop` → 客戶端當成功移除 queue |
+| **Hub close** | 維持 .36 fire-and-forget；batch 唔 re-block close |
+| **佇列／撤銷** | 不變；flush 中仍不可撤銷 |
+
+### 流程（.37）
+
+```mermaid
+sequenceDiagram
+  participant Hub as report-issue.js
+  participant AS as flushStagingApprovals
+  participant GH as GitHub files
+
+  Hub->>Hub: hubState.flushing gate
+  loop chunks of ≤50
+    Hub->>AS: ops[] (mixed kinds)
+    Note over AS: load stores once; validate all
+    AS->>AS: partition ok / failed / needsConfirm / noop
+    AS->>AS: apply okToApply in memory
+    alt any ok bank/proposal dirty
+      AS->>GH: bank (1 write group) + proposals files
+    end
+    AS-->>Hub: per-item results
+    Hub->>Hub: remove ok+noop; leave failed/needsConfirm
+  end
+```
+
+- **Commit 行為：** 10 筆成功 approve ≈ **1–3 Git write groups**（bank dual-write 可能 1–3 檔 + 最多 2 個 proposals 檔），**唔**係每題一 commit。
+- **失敗：** 逐項 `console.error` + 摘要；失敗／needsConfirm 留 `pendingOps`；chip「立即上傳」可重試。
+
 ## 修改史（決策型）
 
 | 何時／PR | 方向改變 |
@@ -124,11 +168,14 @@ sequenceDiagram
 | `.33` 卡上提案預覽 | 黃色 bar 顯示 proposedValues／questionParts（`formatClassList`／`formatPartsPreview`）；✓／✕ 不變 |
 | `.34` flush 跳過失敗 | 單筆失敗／取消覆寫 → `console.error`＋留 pending＋**繼續**其餘；部分完成 toast；marks 不符附總分=0 提示；說明本機編輯≠重寫 approve op |
 | `.35` 待上傳佇列撤銷 | chip「檢視佇列」panel；`proposalSnap`／`undoBankSnap`；單項撤銷還原 staging＋本機 bank |
+| `.36` hub-close 背景 flush | 關窗立即 hide；`flushPendingOps({reason:'hub-close'})` fire-and-forget |
+| `.37` 批次 validate-then-commit | `flushStagingApprovals`：validate-all → 每檔一次 Git；mixed parts/class/reject；cap 50；noop idempotent；needsConfirm skip |
 
 ## 待辦
 
 - [x] 待上傳佇列檢視／撤銷（.35；chip panel＋單項撤銷＋undo bank／還原 staging）
 - [x] 題目卡 pending 顯示提案內容（.33；分類欄位 diff + 分題 parts preview）
+- [x] 大批量 flush validate-then-commit（.37；cap 50＋per-item results）
 - [ ] 大批量分類通過時的進度／取消 UX（待核實需求）
 - [ ] issues／AI tab 是否也需要 per-item in-flight／local queue（目前多用 `hubState.busy` 即時雲端）
 - [x] flush 跳過失敗繼續其餘（.34；取消覆寫亦 skip＋continue；未做「取消其餘」按鈕）
@@ -162,3 +209,9 @@ sequenceDiagram
 21. **檢視佇列**：本機通過／拒絕數筆後，chip 見「待上傳審批 N」→ 按「檢視佇列」（或點標籤）→ panel 列出 questionId／分題或分類／通過或拒絕／預覽。  
 22. **撤銷**：對一筆按「撤銷」→ 該筆離開 pending／chip 減 1；hub（若開）與題目卡再出現該待審批；若曾本機套用分題／分類，題庫 UI 應回退；其餘佇列項不變。  
 23. flush 進行中：撤銷按鈕應禁用；上傳完畢且佇列空 → panel 顯示沒有待上傳項目。
+
+24. **批次 flush**：本機通過 10 筆（可混分題＋分類＋拒絕）→ 關 hub／立即上傳 → DevTools 見 `[審批同步] batch summary`（`gitWriteGroups` 約 1–3，唔係 10+）；成功者離開 pending。
+25. **部分失敗**：故意一筆 marks 不符 → 其餘成功上雲；失敗者留 chip；`console.error` 有詳情。
+26. **needsConfirm 背景**：flush 遇需覆寫且無 `confirmOverwrite` → **唔**彈窗；該筆留 pending；其餘繼續。
+27. **Idempotent**：同一提案已審走後再 flush → `noop`、queue 清走、唔當整批失敗。
+28. **>50**：queue 60 筆 → 兩批（50+10）依次；唔回 `batch_too_large`（客戶端已 chunk）。

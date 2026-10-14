@@ -829,6 +829,151 @@
         return false;
     }
 
+    var FLUSH_STAGING_BATCH_MAX = 50;
+
+    function pendingOpToBatchPayload(op) {
+        var payload = {
+            localId: String(op.localId || ''),
+            kind: String(op.kind || ''),
+            op: String(op.op || ''),
+            proposalId: String(op.proposalId || ''),
+            questionId: String(op.questionId || ''),
+            confirmOverwrite: op.confirmOverwrite === true
+        };
+        if (op.kind === 'class' && op.op === 'approve') {
+            payload.approveFields = Array.isArray(op.approveFields) ? op.approveFields : [];
+            payload.values = op.values || {};
+        }
+        if (op.kind === 'class' && op.op === 'reject') {
+            if (Array.isArray(op.rejectFields) && op.rejectFields.length) {
+                payload.rejectFields = op.rejectFields;
+            }
+        }
+        return payload;
+    }
+
+    function findPendingOpByLocalId(localId) {
+        var id = String(localId || '');
+        var ops = hubState.pendingOps || [];
+        for (var i = 0; i < ops.length; i++) {
+            if (ops[i] && String(ops[i].localId) === id) return ops[i];
+        }
+        return null;
+    }
+
+    function applyBatchFlushResultItem(item, reason) {
+        var localId = String(item && item.localId || '');
+        var op = findPendingOpByLocalId(localId);
+        var status = item && item.status;
+        // Success / noop / blank_only → remove from client queue
+        if (status === 'ok' || status === 'noop') {
+            if (item.question) {
+                if (op && op.kind === 'parts') {
+                    scheduleLocalBankApply(applyApprovedPartsLocally(item.question));
+                } else if (op && op.kind === 'class') {
+                    scheduleLocalBankApply(applyApprovedClassificationLocally(item.question));
+                } else if (item.kind === 'parts') {
+                    scheduleLocalBankApply(applyApprovedPartsLocally(item.question));
+                } else if (item.kind === 'class') {
+                    scheduleLocalBankApply(applyApprovedClassificationLocally(item.question));
+                }
+            }
+            if (op && item.proposalRemaining != null) {
+                op.proposalRemaining = item.proposalRemaining;
+            }
+            if (localId) removePendingOp(localId);
+            return { done: true };
+        }
+        if (status === 'needsConfirm') {
+            var confirmMsg = (item && item.message && String(item.message))
+                || '需要確認覆寫';
+            logFlushOpFailure(op || item, confirmMsg, item, reason, null);
+            return {
+                done: false,
+                failed: {
+                    questionId: String((item && item.questionId) || (op && op.questionId) || ''),
+                    message: confirmMsg,
+                    needsConfirm: true
+                }
+            };
+        }
+        // failed
+        var failMsg = (item && item.message && String(item.message))
+            || errorMessage(item && item.error);
+        logFlushOpFailure(op || item, failMsg, item, reason, null);
+        return {
+            done: false,
+            failed: {
+                questionId: String((item && item.questionId) || (op && op.questionId) || ''),
+                message: failMsg
+            }
+        };
+    }
+
+    async function flushPendingOpsBatchChunk(chunk, reason) {
+        var data = await enqueueStagingWrite(function () {
+            return proxyAction({
+                action: 'flushStagingApprovals',
+                ops: chunk.map(pendingOpToBatchPayload)
+            }, 180000);
+        });
+        return data;
+    }
+
+    async function flushPendingOpsSequentialFallback(ops, reason) {
+        var done = 0;
+        var failedList = [];
+        for (var i = 0; i < ops.length; i++) {
+            var op = ops[i];
+            if (!findPendingOpByLocalId(op.localId)) continue;
+            notifyFlushStatus('正在同步至雲端（' + done + '／' + ops.length + '）…', 'info', reason);
+            var data = null;
+            try {
+                data = await enqueueStagingWrite(function () {
+                    return executePendingOp(op);
+                });
+            } catch (err) {
+                var catchMsg = errorMessage(err && err.code);
+                logFlushOpFailure(op, catchMsg, null, reason, err);
+                failedList.push({ questionId: String(op.questionId || ''), message: catchMsg });
+                continue;
+            }
+            if (data && data.needsConfirm === true && op.confirmOverwrite !== true) {
+                // Prefer skip+report (never block hub-close / background flush on confirm).
+                var cancelMsg = (data.message && String(data.message)) || '需要確認覆寫';
+                logFlushOpFailure(op, cancelMsg, data, reason, null);
+                failedList.push({ questionId: String(op.questionId || ''), message: cancelMsg });
+                continue;
+            }
+            if (data && data.error === 'blank_only_filled') {
+                if (Object.prototype.hasOwnProperty.call(data, 'proposalRemaining')) {
+                    op.proposalRemaining = data.proposalRemaining;
+                }
+                removePendingOp(op.localId);
+                done += 1;
+                continue;
+            }
+            if (!data || data.ok !== true) {
+                var failMsg = (data && data.message && String(data.message))
+                    || errorMessage(data && data.error);
+                logFlushOpFailure(op, failMsg, data, reason, null);
+                failedList.push({ questionId: String(op.questionId || ''), message: failMsg });
+                continue;
+            }
+            if (data.question) {
+                if (op.kind === 'parts') {
+                    scheduleLocalBankApply(applyApprovedPartsLocally(data.question));
+                } else if (op.kind === 'class') {
+                    scheduleLocalBankApply(applyApprovedClassificationLocally(data.question));
+                }
+            }
+            removePendingOp(op.localId);
+            done += 1;
+        }
+        return { done: done, failedList: failedList };
+    }
+
+
     function executePendingOp(op) {
         if (op.kind === 'parts' && op.op === 'approve') {
             return proxyAction({
@@ -904,8 +1049,8 @@
         options = options || {};
         var reason = options.reason || 'hub';
         if (hubState.flushing) return false;
-        var ops = (hubState.pendingOps || []).slice();
-        if (!ops.length) {
+        var opsSnapshot = (hubState.pendingOps || []).slice();
+        if (!opsSnapshot.length) {
             lastFlushError = '';
             updatePendingFlushChip();
             return true;
@@ -914,90 +1059,123 @@
         hubState.busy = true;
         syncBulkButton();
         updatePendingFlushChip();
-        var total = ops.length;
+        var total = opsSnapshot.length;
         var done = 0;
         var failedList = [];
         notifyFlushStatus('正在同步至雲端（0／' + total + '）…', 'info', reason);
         try {
-            for (var i = 0; i < ops.length; i++) {
-                var op = ops[i];
-                notifyFlushStatus('正在同步至雲端（' + done + '／' + total + '）…', 'info', reason);
-                var data = null;
-                try {
-                    data = await enqueueStagingWrite(function () {
-                        return executePendingOp(op);
-                    });
-                } catch (err) {
-                    var catchMsg = errorMessage(err && err.code);
-                    logFlushOpFailure(op, catchMsg, null, reason, err);
-                    failedList.push({
-                        questionId: String(op.questionId || ''),
-                        message: catchMsg
-                    });
-                    continue;
-                }
-                if (data && data.needsConfirm === true && op.confirmOverwrite !== true) {
-                    var confirmOk = global.confirm
-                        ? global.confirm(
-                            '同步時發現題目「' + String(op.questionId || '')
-                            + '」需要確認覆寫。確定覆寫並繼續同步其餘項目？'
-                        )
-                        : false;
-                    if (!confirmOk) {
-                        // Prefer skip this op and continue; leave it in pendingOps.
-                        var cancelMsg = '已取消覆寫';
-                        logFlushOpFailure(op, cancelMsg, data, reason, null);
-                        failedList.push({
-                            questionId: String(op.questionId || ''),
-                            message: cancelMsg
-                        });
-                        continue;
-                    }
-                    op.confirmOverwrite = true;
-                    persistPendingOps();
+            var useBatch = true;
+            var offset = 0;
+            while (offset < opsSnapshot.length) {
+                var chunk = opsSnapshot.slice(offset, offset + FLUSH_STAGING_BATCH_MAX);
+                offset += FLUSH_STAGING_BATCH_MAX;
+                // Only ops still pending (revoked mid-flight stay skipped).
+                chunk = chunk.filter(function (op) {
+                    return op && findPendingOpByLocalId(op.localId);
+                });
+                if (!chunk.length) continue;
+                notifyFlushStatus(
+                    '正在同步至雲端（' + done + '／' + total + '）…',
+                    'info',
+                    reason
+                );
+
+                if (useBatch) {
+                    var data = null;
                     try {
-                        data = await enqueueStagingWrite(function () {
-                            return executePendingOp(op);
-                        });
-                    } catch (err2) {
-                        var catchMsg2 = errorMessage(err2 && err2.code);
-                        logFlushOpFailure(op, catchMsg2, null, reason, err2);
-                        failedList.push({
-                            questionId: String(op.questionId || ''),
-                            message: catchMsg2
+                        data = await flushPendingOpsBatchChunk(chunk, reason);
+                    } catch (err) {
+                        var batchErrCode = err && err.code;
+                        // Old deployment / unknown action → fall back to sequential for this flush.
+                        if (batchErrCode === 'unknown_action' || batchErrCode === 'bad_request') {
+                            console.warn('[審批同步] batch API 不可用，改用逐筆同步', err);
+                            useBatch = false;
+                            var seq = await flushPendingOpsSequentialFallback(chunk, reason);
+                            done += seq.done;
+                            failedList = failedList.concat(seq.failedList);
+                            continue;
+                        }
+                        var catchMsg = errorMessage(batchErrCode);
+                        console.error('[審批同步失敗] batch', { reason: reason, error: err });
+                        chunk.forEach(function (op) {
+                            logFlushOpFailure(op, catchMsg, null, reason, err);
+                            failedList.push({
+                                questionId: String(op.questionId || ''),
+                                message: catchMsg
+                            });
                         });
                         continue;
                     }
-                }
-                if (data && data.error === 'blank_only_filled') {
-                    if (Object.prototype.hasOwnProperty.call(data, 'proposalRemaining')) {
-                        op.proposalRemaining = data.proposalRemaining;
+                    if (data && data.error === 'batch_too_large') {
+                        // Should not happen when client chunks; treat as hard fail for chunk.
+                        var tooLargeMsg = (data.message && String(data.message))
+                            || '單批項目過多';
+                        chunk.forEach(function (op) {
+                            logFlushOpFailure(op, tooLargeMsg, data, reason, null);
+                            failedList.push({
+                                questionId: String(op.questionId || ''),
+                                message: tooLargeMsg
+                            });
+                        });
+                        continue;
                     }
-                    removePendingOp(op.localId);
-                    done += 1;
-                    continue;
-                }
-                if (!data || data.ok !== true) {
-                    var failMsg = (data && data.message && String(data.message))
-                        || errorMessage(data && data.error);
-                    logFlushOpFailure(op, failMsg, data, reason, null);
-                    failedList.push({
-                        questionId: String(op.questionId || ''),
-                        message: failMsg
+                    if (!data || data.ok !== true || !Array.isArray(data.results)) {
+                        // Unknown / undeployed action → sequential fallback once.
+                        var errCode = data && data.error;
+                        if (errCode === 'unknown_action' || errCode === 'bad_request' || !data) {
+                            console.warn('[審批同步] batch 回應異常，改用逐筆同步', data);
+                            useBatch = false;
+                            var seq2 = await flushPendingOpsSequentialFallback(chunk, reason);
+                            done += seq2.done;
+                            failedList = failedList.concat(seq2.failedList);
+                            continue;
+                        }
+                        var failAll = (data.message && String(data.message))
+                            || errorMessage(errCode);
+                        chunk.forEach(function (op) {
+                            logFlushOpFailure(op, failAll, data, reason, null);
+                            failedList.push({
+                                questionId: String(op.questionId || ''),
+                                message: failAll
+                            });
+                        });
+                        continue;
+                    }
+                    if (data.summary) {
+                        console.info('[審批同步] batch summary', data.summary);
+                    }
+                    for (var riIdx = 0; riIdx < data.results.length; riIdx++) {
+                        var applied = applyBatchFlushResultItem(data.results[riIdx], reason);
+                        if (applied.done) done += 1;
+                        else if (applied.failed) failedList.push(applied.failed);
+                    }
+                    // Ops in chunk with no result row → leave pending + report
+                    var resultIds = {};
+                    data.results.forEach(function (r) {
+                        if (r && r.localId) resultIds[String(r.localId)] = true;
                     });
-                    continue;
+                    chunk.forEach(function (op) {
+                        if (!resultIds[String(op.localId)]) {
+                            var miss = '伺服器未回傳此項目結果';
+                            logFlushOpFailure(op, miss, data, reason, null);
+                            failedList.push({
+                                questionId: String(op.questionId || ''),
+                                message: miss
+                            });
+                        }
+                    });
+                } else {
+                    var seq3 = await flushPendingOpsSequentialFallback(chunk, reason);
+                    done += seq3.done;
+                    failedList = failedList.concat(seq3.failedList);
                 }
-                if (data.question) {
-                    if (op.kind === 'parts') {
-                        scheduleLocalBankApply(applyApprovedPartsLocally(data.question));
-                    } else if (op.kind === 'class') {
-                        scheduleLocalBankApply(applyApprovedClassificationLocally(data.question));
-                    }
-                }
-                removePendingOp(op.localId);
-                done += 1;
-                notifyFlushStatus('正在同步至雲端（' + done + '／' + total + '）…', 'info', reason);
+                notifyFlushStatus(
+                    '正在同步至雲端（' + done + '／' + total + '）…',
+                    'info',
+                    reason
+                );
             }
+
             if (failedList.length) {
                 var firstFail = failedList[0];
                 var firstMsg = firstFail && firstFail.message ? String(firstFail.message) : '';
@@ -1042,7 +1220,6 @@
             updatePendingFlushChip();
             if (hasUnsyncedPending()) {
                 // Keep chip visible; do not auto-retry immediately after failure.
-                // User can press 立即上傳, or a later enqueue will reschedule.
             }
         }
     }
