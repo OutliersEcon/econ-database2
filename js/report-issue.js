@@ -75,9 +75,54 @@
         statusFilter: 'open', // open | resolved | all (issues/ai only)
         selected: {},
         busy: false,
+        // Per-proposal in-flight keys (e.g. "class:ID", "parts:ID") so the same
+        // approve cannot double-submit, while a *different* proposal can be
+        // clicked as soon as the current network write finishes — without
+        // waiting for IndexedDB getAll + filter/list re-render.
+        inFlight: Object.create(null),
+        _writeChain: Promise.resolve(),
         loading: false,
         error: ''
     };
+
+    function stagingActionKey(kind, proposalId) {
+        return String(kind || '') + ':' + String(proposalId || '');
+    }
+
+    function isStagingInFlight(kind, proposalId) {
+        return !!hubState.inFlight[stagingActionKey(kind, proposalId)];
+    }
+
+    function anyStagingInFlight() {
+        return Object.keys(hubState.inFlight).length > 0;
+    }
+
+    function tryBeginStagingAction(kind, proposalId) {
+        if (hubState.busy) return false;
+        var key = stagingActionKey(kind, proposalId);
+        if (!proposalId || hubState.inFlight[key]) return false;
+        hubState.inFlight[key] = true;
+        return true;
+    }
+
+    function endStagingAction(kind, proposalId) {
+        delete hubState.inFlight[stagingActionKey(kind, proposalId)];
+    }
+
+    // Serialize GitHub staging writes so overlapping clicks on different
+    // proposals cannot 409 the same proposals/bank files.
+    function enqueueStagingWrite(fn) {
+        var run = hubState._writeChain.then(function () {
+            return fn();
+        });
+        hubState._writeChain = run.then(function () {}, function () {});
+        return run;
+    }
+
+    function scheduleLocalBankApply(promise) {
+        if (!promise || typeof promise.then !== 'function') return;
+        promise.catch(function () {});
+    }
 
     function esc(text) {
         return (typeof escapeHTML === 'function') ? escapeHTML(text) : String(text == null ? '' : text);
@@ -516,6 +561,7 @@
         hubOverlay.hidden = true;
         hubState.selected = {};
         hubState.busy = false;
+        hubState.inFlight = Object.create(null);
         if (global.AiExplanation && typeof AiExplanation.closeAdminPanel === 'function') {
             AiExplanation.closeAdminPanel();
         }
@@ -718,20 +764,21 @@
         var btn = document.getElementById('feedback-hub-bulk-resolve');
         if (!btn) return;
         var n = Object.keys(hubState.selected).length;
+        var locked = hubState.busy || anyStagingInFlight();
         if (hubState.tab === 'parts' || hubState.tab === 'classification') {
             var total = hubState.tab === 'parts'
                 ? (hubState.partsRows || []).length
                 : (hubState.classRows || []).length;
             if (n > 0) {
-                btn.disabled = hubState.busy;
+                btn.disabled = locked;
                 btn.textContent = '通過選中（' + n + '）';
             } else {
-                btn.disabled = hubState.busy || total === 0;
+                btn.disabled = locked || total === 0;
                 btn.textContent = '通過全部';
             }
             return;
         }
-        btn.disabled = hubState.busy || n === 0;
+        btn.disabled = locked || n === 0;
         btn.textContent = n ? ('標記已關閉（' + n + '）') : '標記已關閉';
     }
 
@@ -798,9 +845,11 @@
                     + (row.note ? '  <p class="feedback-hub-text">' + esc(row.note) + '</p>' : '')
                     + '  <div class="feedback-hub-meta">'
                     + '    <button type="button" class="btn btn-primary btn-sm" data-parts-approve="'
-                    + esc(id) + '">通過</button>'
+                    + esc(id) + '"' + (isStagingInFlight('parts', id) ? ' disabled' : '')
+                    + '>通過</button>'
                     + '    <button type="button" class="btn btn-outline-danger btn-sm" data-parts-reject="'
-                    + esc(id) + '">拒絕</button>'
+                    + esc(id) + '"' + (isStagingInFlight('parts', id) ? ' disabled' : '')
+                    + '>拒絕</button>'
                     + '  </div>'
                     + '</article>';
             }).join('');
@@ -842,9 +891,13 @@
                             + '" placeholder="' + esc(placeholder) + '" autocomplete="off">');
                     var currentFilled = !classValueIsEmpty(field, current[field]);
                     var approveDisabled = meta && meta.blankOnly && currentFilled;
-                    var approveBtn = approveDisabled
+                    var rowBusy = isStagingInFlight('class', id);
+                    var approveBtn = (approveDisabled || rowBusy)
                         ? ('<button type="button" class="btn btn-primary btn-sm" disabled'
-                            + ' title="題庫此欄已有值（空白才可寫入）">通過此欄</button>')
+                            + (approveDisabled
+                                ? ' title="題庫此欄已有值（空白才可寫入）"'
+                                : ' title="處理中…"')
+                            + '>通過此欄</button>')
                         : ('<button type="button" class="btn btn-primary btn-sm" data-class-id="'
                             + esc(id) + '" data-class-approve-field="' + esc(field) + '">通過此欄</button>');
                     return ''
@@ -864,8 +917,9 @@
                         + '  <div class="feedback-hub-class-field-actions">'
                         + '    ' + approveBtn
                         + '    <button type="button" class="btn btn-secondary btn-sm" data-class-id="'
-                        + esc(id) + '" data-class-keep-field="' + esc(field)
-                        + '" title="不寫入題庫，只從提案移除此欄">保留原值</button>'
+                        + esc(id) + '" data-class-keep-field="' + esc(field) + '"'
+                        + (rowBusy ? ' disabled' : '')
+                        + ' title="不寫入題庫，只從提案移除此欄">保留原值</button>'
                         + '  </div>'
                         + '</div>';
                 }).join('');
@@ -890,9 +944,11 @@
                     + (row.reason ? '  <p class="feedback-hub-text">理由：' + esc(row.reason) + '</p>' : '')
                     + '  <div class="feedback-hub-meta">'
                     + '    <button type="button" class="btn btn-primary btn-sm" data-class-approve="'
-                    + esc(id) + '">通過全部欄位</button>'
+                    + esc(id) + '"' + (isStagingInFlight('class', id) ? ' disabled' : '')
+                    + '>通過全部欄位</button>'
                     + '    <button type="button" class="btn btn-outline-danger btn-sm" data-class-reject="'
-                    + esc(id) + '" title="不寫入題庫，整筆提案移除">全部保留原值</button>'
+                    + esc(id) + '"' + (isStagingInFlight('class', id) ? ' disabled' : '')
+                    + ' title="不寫入題庫，整筆提案移除">全部保留原值</button>'
                     + '  </div>'
                     + '</article>';
             }).join('');
@@ -1021,19 +1077,24 @@
     }
 
     async function approvePartsProposal(proposalId) {
-        if (hubState.busy || !hasAdminAccess()) return;
+        if (!hasAdminAccess()) return;
         var row = findPartsRow(proposalId);
         if (!row) return;
-        hubState.busy = true;
+        var actionId = String(row.id || '');
+        if (!tryBeginStagingAction('parts', actionId)) return;
         syncBulkButton();
+        renderHubList();
         setHubBanner('通過中…', 'info');
+        var localBankSnap = null;
         try {
-            var data = await proxyAction({
-                action: 'approveQuestionPartsProposal',
-                proposalId: String(row.id || ''),
-                questionId: String(row.questionId || ''),
-                confirmOverwrite: false
-            }, 120000);
+            var data = await enqueueStagingWrite(function () {
+                return proxyAction({
+                    action: 'approveQuestionPartsProposal',
+                    proposalId: String(row.id || ''),
+                    questionId: String(row.questionId || ''),
+                    confirmOverwrite: false
+                }, 120000);
+            });
             if (!data) {
                 setHubBanner(errorMessage('github_error'), 'error');
                 return;
@@ -1053,12 +1114,14 @@
                     return;
                 }
                 setHubBanner('覆寫並通過中…', 'info');
-                data = await proxyAction({
-                    action: 'approveQuestionPartsProposal',
-                    proposalId: String(row.id || ''),
-                    questionId: String(row.questionId || ''),
-                    confirmOverwrite: true
-                }, 120000);
+                data = await enqueueStagingWrite(function () {
+                    return proxyAction({
+                        action: 'approveQuestionPartsProposal',
+                        proposalId: String(row.id || ''),
+                        questionId: String(row.questionId || ''),
+                        confirmOverwrite: true
+                    }, 120000);
+                });
             }
             if (!data || data.ok !== true) {
                 setHubBanner(
@@ -1070,34 +1133,39 @@
             hubState.partsRows = (hubState.partsRows || []).filter(function (item) {
                 return !(item && String(item.id) === String(row.id));
             });
-            await applyApprovedPartsLocally(data.question);
             setHubBanner('已通過並寫入題庫：' + String(row.questionId || ''), 'ok');
-            renderHubList();
+            localBankSnap = data.question;
         } catch (err) {
             setHubBanner(errorMessage(err && err.code), 'error');
         } finally {
-            hubState.busy = false;
+            endStagingAction('parts', actionId);
             syncBulkButton();
+            renderHubList();
         }
+        if (localBankSnap) scheduleLocalBankApply(applyApprovedPartsLocally(localBankSnap));
     }
 
     async function rejectPartsProposal(proposalId) {
-        if (hubState.busy || !hasAdminAccess()) return;
+        if (!hasAdminAccess()) return;
         var row = findPartsRow(proposalId);
         if (!row) return;
         var ok = global.confirm
             ? global.confirm('拒絕題目「' + String(row.questionId || '') + '」的分題提案？提案會從暫存移除，不會改題庫。')
             : true;
         if (!ok) return;
-        hubState.busy = true;
+        var actionId = String(row.id || '');
+        if (!tryBeginStagingAction('parts', actionId)) return;
         syncBulkButton();
+        renderHubList();
         setHubBanner('拒絕中…', 'info');
         try {
-            var data = await proxyAction({
-                action: 'rejectQuestionPartsProposal',
-                proposalId: String(row.id || ''),
-                questionId: String(row.questionId || '')
-            }, 60000);
+            var data = await enqueueStagingWrite(function () {
+                return proxyAction({
+                    action: 'rejectQuestionPartsProposal',
+                    proposalId: String(row.id || ''),
+                    questionId: String(row.questionId || '')
+                }, 60000);
+            });
             if (!data || data.ok !== true) {
                 setHubBanner(errorMessage(data && data.error), 'error');
                 return;
@@ -1106,12 +1174,12 @@
                 return !(item && String(item.id) === String(row.id));
             });
             setHubBanner('已拒絕並移除提案：' + String(row.questionId || ''), 'ok');
-            renderHubList();
         } catch (err) {
             setHubBanner(errorMessage(err && err.code), 'error');
         } finally {
-            hubState.busy = false;
+            endStagingAction('parts', actionId);
             syncBulkButton();
+            renderHubList();
         }
     }
 
@@ -1327,7 +1395,7 @@
     }
 
     async function approveClassificationProposal(proposalId, options) {
-        if (hubState.busy || !hasAdminAccess()) return;
+        if (!hasAdminAccess()) return;
         var row = findClassRow(proposalId);
         if (!row) return;
         options = options || {};
@@ -1396,9 +1464,12 @@
             }
         }
 
-        hubState.busy = true;
+        var actionId = String(row.id || '');
+        if (!tryBeginStagingAction('class', actionId)) return;
         syncBulkButton();
+        renderHubList();
         setHubBanner('通過中…', 'info');
+        var localBankSnap = null;
         try {
             var payload = {
                 action: 'approveClassificationProposal',
@@ -1408,7 +1479,9 @@
                 values: values,
                 confirmOverwrite: false
             };
-            var data = await proxyAction(payload, 120000);
+            var data = await enqueueStagingWrite(function () {
+                return proxyAction(payload, 120000);
+            });
             if (!data) {
                 setHubBanner(errorMessage('github_error'), 'error');
                 return;
@@ -1429,7 +1502,9 @@
                 }
                 setHubBanner('覆寫並通過中…', 'info');
                 payload.confirmOverwrite = true;
-                data = await proxyAction(payload, 120000);
+                data = await enqueueStagingWrite(function () {
+                    return proxyAction(payload, 120000);
+                });
             }
             if (data && data.error === 'blank_only_filled') {
                 applyClassProposalRemaining(row.id, data.proposalRemaining);
@@ -1449,7 +1524,6 @@
                 );
                 return;
             }
-            await applyApprovedClassificationLocally(data.question);
             applyClassProposalRemaining(row.id, data.proposalRemaining);
             var fieldNote = (data.approvedFields && data.approvedFields.length)
                 ? '（' + data.approvedFields.join('、') + '）'
@@ -1458,18 +1532,20 @@
                 ? '；略過空白才寫：' + data.blockedFields.map(classFieldLabel).join('、')
                 : '';
             setHubBanner('已通過並寫入題庫：' + String(row.questionId || '') + fieldNote + blockedNote, 'ok');
-            syncHubChrome();
-            renderHubList();
+            localBankSnap = data.question;
         } catch (err) {
             setHubBanner(errorMessage(err && err.code), 'error');
         } finally {
-            hubState.busy = false;
+            endStagingAction('class', actionId);
             syncBulkButton();
+            syncHubChrome();
+            renderHubList();
         }
+        if (localBankSnap) scheduleLocalBankApply(applyApprovedClassificationLocally(localBankSnap));
     }
 
     async function rejectClassificationProposal(proposalId, options) {
-        if (hubState.busy || !hasAdminAccess()) return;
+        if (!hasAdminAccess()) return;
         var row = findClassRow(proposalId);
         if (!row) return;
         options = options || {};
@@ -1492,8 +1568,10 @@
             )
             : true;
         if (!ok) return;
-        hubState.busy = true;
+        var actionId = String(row.id || '');
+        if (!tryBeginStagingAction('class', actionId)) return;
         syncBulkButton();
+        renderHubList();
         setHubBanner(partial ? '保留原值中…' : '拒絕中…', 'info');
         try {
             var payload = {
@@ -1502,7 +1580,9 @@
                 questionId: String(row.questionId || '')
             };
             if (partial) payload.rejectFields = rejectFields;
-            var data = await proxyAction(payload, 60000);
+            var data = await enqueueStagingWrite(function () {
+                return proxyAction(payload, 60000);
+            });
             if (!data || data.ok !== true) {
                 setHubBanner(
                     (data && data.message && String(data.message)) || errorMessage(data && data.error),
@@ -1517,18 +1597,18 @@
                     : '已全部保留原值並移除提案：' + String(row.questionId || ''),
                 'ok'
             );
-            syncHubChrome();
-            renderHubList();
         } catch (err) {
             setHubBanner(errorMessage(err && err.code), 'error');
         } finally {
-            hubState.busy = false;
+            endStagingAction('class', actionId);
             syncBulkButton();
+            syncHubChrome();
+            renderHubList();
         }
     }
 
     async function bulkApproveClassification() {
-        if (hubState.busy || !hasAdminAccess()) return;
+        if (hubState.busy || anyStagingInFlight() || !hasAdminAccess()) return;
         var selected = Object.keys(hubState.selected).filter(Boolean);
         var ids = selected.length
             ? selected
@@ -1566,7 +1646,7 @@
                     if (!item) continue;
                     approvedIds[String(item.proposalId || '')] = true;
                     delete hubState.selected[String(item.proposalId || '')];
-                    await applyApprovedClassificationLocally(item.question);
+                    scheduleLocalBankApply(applyApprovedClassificationLocally(item.question));
                 }
                 hubState.classRows = (hubState.classRows || []).filter(function (row) {
                     return !(row && approvedIds[String(row.id || '')]);
@@ -1647,7 +1727,7 @@
     }
 
     async function bulkApproveParts() {
-        if (hubState.busy || !hasAdminAccess()) return;
+        if (hubState.busy || anyStagingInFlight() || !hasAdminAccess()) return;
         var selected = Object.keys(hubState.selected).filter(Boolean);
         var ids = selected.length
             ? selected
@@ -1685,7 +1765,7 @@
                     if (!item) continue;
                     approvedIds[String(item.proposalId || '')] = true;
                     delete hubState.selected[String(item.proposalId || '')];
-                    await applyApprovedPartsLocally(item.question);
+                    scheduleLocalBankApply(applyApprovedPartsLocally(item.question));
                 }
                 hubState.partsRows = (hubState.partsRows || []).filter(function (row) {
                     return !(row && approvedIds[String(row.id || '')]);
