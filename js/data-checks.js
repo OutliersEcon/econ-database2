@@ -153,7 +153,11 @@
     }
     function conditionFields() {
         var m = Match();
-        return (m && m.FIELDS) || [];
+        var fields = (m && m.FIELDS) || [];
+        var adminOk = !!(window.accessRights && window.accessRights.admin === true);
+        return fields.filter(function (def) {
+            return !(def.adminOnly && !adminOk);
+        });
     }
     function conditionFieldById() {
         var m = Match();

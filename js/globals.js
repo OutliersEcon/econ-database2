@@ -7,6 +7,7 @@ var searchScope = 'all';
 var triStateFilters = {
     curriculum: {},
     feature: { 'Out syl': 'excluded' },
+    adminBlank: {},
     partPerformance: {},
     chapter: {},
     publisher: {},

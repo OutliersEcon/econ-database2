@@ -41,14 +41,12 @@ function renderFiltersTemplate() {
 
         <div class="filter-panel-heading">
             <h2 class="filter-panel-title">篩選</h2>
-            <p class="filter-panel-lead">以快速搜尋、基本篩選條件或進階篩選縮小題目列表；三者可並用，行為與先前相同。</p>
         </div>
 
         <!-- 快速搜尋：scope is explicit -->
         <section class="filter-section search-row" aria-labelledby="quick-search-heading">
             <div class="filter-section-head">
                 <h3 id="quick-search-heading" class="filter-section-title">快速搜尋</h3>
-                <p class="filter-section-hint">只搜尋左側「搜尋範圍」所選的欄位。</p>
             </div>
             <div class="search-input-group">
                 <div class="scope-select-wrapper">
@@ -66,7 +64,6 @@ function renderFiltersTemplate() {
         <section class="filter-section filter-entry-row" aria-labelledby="filter-conditions-heading">
             <div class="filter-section-head">
                 <h3 id="filter-conditions-heading" class="filter-section-title">篩選條件</h3>
-                <p class="filter-section-hint">基本篩選為常用下拉與範圍；進階篩選以欄位條件組合（全部 AND）。</p>
             </div>
             <div class="btn-group filter-entry-actions">
                 <button type="button" id="toggle-filters-btn" class="btn btn-secondary btn-sm" onclick="toggleFiltersPanel()" aria-expanded="false" aria-controls="collapsible-filters-wrapper">▶️ 顯示篩選條件</button>
@@ -207,6 +204,17 @@ function renderFiltersTemplate() {
                         </button>
                         <span class="active-indicator" id="indicator-feature"></span>
                         <div class="custom-grid-dropdown" id="feature-options"></div>
+                    </div>
+                </div>
+
+                <!-- 空白／缺漏 (admin only; options built in utils.js) -->
+                <div class="filter-item" id="admin-blank-filter-item" hidden>
+                    <div class="dropdown-filter">
+                        <button class="dropdown-btn" onclick="toggleDropdown('admin-blank-options')">
+                            <span>空白／缺漏</span><span class="arrow" id="admin-blank-arrow">▶</span>
+                        </button>
+                        <span class="active-indicator" id="indicator-adminBlank"></span>
+                        <div class="custom-grid-dropdown" id="admin-blank-options"></div>
                     </div>
                 </div>
 

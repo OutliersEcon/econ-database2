@@ -503,6 +503,7 @@ if (document.readyState === 'loading') {
         populateCurriculumFilter();
         populateChapterFilter();
         populateFeatureFilter();
+        if (typeof populateAdminBlankFilter === 'function') populateAdminBlankFilter();
         if (typeof populatePartPerformanceFilter === 'function') populatePartPerformanceFilter();
         populateCurriculumFormOptions();
         init();
@@ -511,6 +512,7 @@ if (document.readyState === 'loading') {
     populateCurriculumFilter();
     populateChapterFilter();
     populateFeatureFilter();
+    if (typeof populateAdminBlankFilter === 'function') populateAdminBlankFilter();
     if (typeof populatePartPerformanceFilter === 'function') populatePartPerformanceFilter();
     populateCurriculumFormOptions();
     init();

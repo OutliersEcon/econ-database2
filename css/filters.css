@@ -445,13 +445,19 @@
     border: none;
     background: transparent;
     font-weight: 600;
-    color: var(--primary-color);
+    color: var(--text-color);
     cursor: pointer;
     outline: none;
 }
 
 #sort-order:hover {
-    color: var(--secondary-color);
+    color: var(--text-color);
+}
+
+#sort-order option {
+    color: var(--text-color);
+    background: #fff;
+    font-weight: 500;
 }
 
 .total-count {
@@ -726,6 +732,11 @@ body:not(.poe-ai-allowed) #ai-filter-item {
     display: none !important;
 }
 
+/* Admin 空白／缺漏 filter: JS unhides when accessRights.admin */
+body:not(.admin-blank-allowed) #admin-blank-filter-item {
+    display: none !important;
+}
+
 #ai-options .ai-filter-child {
     padding-left: 22px;
 }
@@ -766,13 +777,15 @@ body:not(.poe-ai-allowed) #ai-filter-item {
 
 /* Curriculum / Feature items as list */
 #curriculum-options .tri-state-label,
-#feature-options .tri-state-label {
+#feature-options .tri-state-label,
+#admin-blank-options .tri-state-label {
     padding: 8px 10px;
     border-radius: 4px;
 }
 
 #curriculum-options .tri-state-label:hover,
-#feature-options .tri-state-label:hover {
+#feature-options .tri-state-label:hover,
+#admin-blank-options .tri-state-label:hover {
     background-color: #f5f5f5;
 }
 

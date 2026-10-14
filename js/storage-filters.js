@@ -545,13 +545,13 @@ IndexedDBStorage.prototype.applyFilters = function(questions, filters) {
             }
         }
 
-        // Feature filters
+        // Feature filters (product-ish 特徵 only)
         if (filters.triState.feature) {
             const features = filters.triState.feature;
-            const adminOk = !!(typeof window !== 'undefined' && window.accessRights && window.accessRights.admin === true);
             
             Object.entries(features).forEach(([value, state]) => {
-                if (typeof isAdminBlankFeature === 'function' && isAdminBlankFeature(value) && !adminOk) {
+                // Ignore legacy admin-blank keys left under feature after logout / older sessions.
+                if (typeof isAdminBlankFeature === 'function' && isAdminBlankFeature(value)) {
                     return;
                 }
                 if (state === 'checked' || state === 'excluded') {
@@ -565,6 +565,25 @@ IndexedDBStorage.prototype.applyFilters = function(questions, filters) {
                     });
                 }
             });
+        }
+
+        // Admin-only 空白／缺漏 filters (same matchers via questionFeatureOn)
+        if (filters.triState.adminBlank) {
+            const adminOk = !!(typeof window !== 'undefined' && window.accessRights && window.accessRights.admin === true);
+            if (adminOk) {
+                Object.entries(filters.triState.adminBlank).forEach(([value, state]) => {
+                    if (state === 'checked' || state === 'excluded') {
+                        const wantOn = state === 'checked';
+                        questions = questions.filter(q => {
+                            if (typeof questionFeatureOn === 'function') {
+                                const on = questionFeatureOn(q, value);
+                                return wantOn ? on : !on;
+                            }
+                            return true;
+                        });
+                    }
+                });
+            }
         }
 
         if (filters.triState.partPerformance) {

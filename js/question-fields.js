@@ -37,7 +37,7 @@
 
     var ADMIN_BLANK_FEATURES = (typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
         ? ADMIN_BLANK_FEATURE_ITEMS.slice()
-        : ['題目空白', '答案空白', '評卷報告空白'];
+        : ['尚未輸入分題', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖'];
 
     function isBlankText(value) {
         if (value === null || value === undefined) return true;
@@ -129,23 +129,28 @@
     }
 
     function effectiveFeatureItems() {
-        var base = (typeof FEATURE_ITEMS !== 'undefined' && Array.isArray(FEATURE_ITEMS))
+        // Product-ish 特徵 only — never append admin blank / missing items.
+        return (typeof FEATURE_ITEMS !== 'undefined' && Array.isArray(FEATURE_ITEMS))
             ? FEATURE_ITEMS.slice()
             : [];
-        if (!isAdminUser()) return base;
-        ADMIN_BLANK_FEATURES.forEach(function (item) {
-            if (base.indexOf(item) === -1) base.push(item);
-        });
-        return base;
+    }
+
+    function effectiveAdminBlankItems() {
+        if (!isAdminUser()) return [];
+        return ADMIN_BLANK_FEATURES.slice();
     }
 
     function clearAdminBlankFeatureFilters() {
+        // Legacy: admin blanks used to live under triStateFilters.feature.
         if (global.triStateFilters && global.triStateFilters.feature) {
             ADMIN_BLANK_FEATURES.forEach(function (item) {
                 delete global.triStateFilters.feature[item];
             });
         }
-        // Also clear 統計 per-tab feature chips (statsFilterState).
+        if (global.triStateFilters) {
+            global.triStateFilters.adminBlank = {};
+        }
+        // Also clear 統計 per-tab adminBlank chips (statsFilterState).
         if (typeof global.clearStatsAdminBlankFeatureFilters === 'function') {
             global.clearStatsAdminBlankFeatureFilters();
         }
@@ -651,6 +656,7 @@
     global.isMarkersReportBlank = isMarkersReportBlank;
     global.isAdminBlankFeature = isAdminBlankFeature;
     global.effectiveFeatureItems = effectiveFeatureItems;
+    global.effectiveAdminBlankItems = effectiveAdminBlankItems;
     global.clearAdminBlankFeatureFilters = clearAdminBlankFeatureFilters;
     global.normalizeQuestionParts = normalizeQuestionParts;
     global.normalizeQuestionPart = normalizeQuestionPart;

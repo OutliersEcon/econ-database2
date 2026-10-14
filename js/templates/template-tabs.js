@@ -44,10 +44,9 @@ function renderTabContentsTemplate() {
         <!-- Active filter badges -->
         <div class="active-filters-panel" id="active-filters-display"></div>
 
-        <!-- Split 操作列: 結果工具 vs 顯示偏好 -->
+        <!-- Split 操作列: action buttons vs 顯示偏好 -->
         <div class="questions-toolbar" aria-label="題目操作列">
-            <div class="toolbar-group toolbar-group-results" aria-labelledby="toolbar-results-label">
-                <span id="toolbar-results-label" class="toolbar-group-label">結果工具</span>
+            <div class="toolbar-group toolbar-group-results">
                 <div class="toolbar-group-controls">
                     <button type="button" class="btn btn-outline-primary" id="copy-filtered-btn" onclick="copyFilteredQuestions()">📋 複製篩選題目</button>
                     <button type="button" class="btn btn-outline-primary" id="poe-generate-btn" hidden aria-label="AI出題">AI出題</button>

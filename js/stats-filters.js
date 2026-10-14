@@ -410,6 +410,7 @@ const STAT_FILTER_DEFS = [
     { key: 'section', label: '📝 Section', kind: 'section', hideOn: ['section'] },
     { key: 'publisher', label: '🏢 出版商', kind: 'publisher', hideOn: ['publishers'] },
     { key: 'feature', label: '🎯 特徵', kind: 'feature', hideOn: ['feature', 'hasParts'] },
+    { key: 'adminBlank', label: '空白／缺漏', kind: 'adminBlank', requiresAdmin: true },
     { key: 'partPerformance', label: '📈 分題表現', kind: 'partPerformance', hideOn: ['partPerformance'] },
     { key: 'graph', label: '📊 圖表類型', kind: 'scalar', field: 'graphType', optional: true, hideOn: ['graph'] },
     { key: 'table', label: '📅 表格類型', kind: 'scalar', field: 'tableType', optional: true, hideOn: ['table'] },
@@ -452,6 +453,7 @@ function emptyStatsTriState() {
         curriculum: {},
         chapter: {},
         feature: featureDefault,
+        adminBlank: {},
         publisher: {},
         exam: {},
         qtype: {},
@@ -599,8 +601,10 @@ function statsSortOptions(tabId) {
 
 function visibleStatFilters(tabId) {
     const aiOk = !!(window.accessRights && window.accessRights.ai === true);
+    const adminOk = !!(window.accessRights && window.accessRights.admin === true);
     const allow = def => {
         if (def.requiresAi && !aiOk) return false;
+        if (def.requiresAdmin && !adminOk) return false;
         return true;
     };
     // Crosstab uses two free axes — keep every dimension filter available.
@@ -637,6 +641,14 @@ function valuesOnQuestion(q, def) {
         const items = (typeof effectiveFeatureItems === 'function')
             ? effectiveFeatureItems()
             : ((typeof FEATURE_ITEMS !== 'undefined') ? FEATURE_ITEMS : []);
+        return items.filter(item => questionFeatureOn(q, item));
+    }
+    if (def.kind === 'adminBlank') {
+        const items = (typeof effectiveAdminBlankItems === 'function')
+            ? effectiveAdminBlankItems()
+            : ((typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
+                ? ADMIN_BLANK_FEATURE_ITEMS.slice()
+                : []);
         return items.filter(item => questionFeatureOn(q, item));
     }
     if (def.kind === 'partPerformance') {
@@ -704,6 +716,8 @@ function staticFilterUniverse(def, counts) {
     else if (def.kind === 'paper') base = ['1', '2'];
     else if (def.kind === 'feature' && typeof effectiveFeatureItems === 'function') base = effectiveFeatureItems();
     else if (def.kind === 'feature' && typeof FEATURE_ITEMS !== 'undefined') base = FEATURE_ITEMS.slice();
+    else if (def.kind === 'adminBlank' && typeof effectiveAdminBlankItems === 'function') base = effectiveAdminBlankItems();
+    else if (def.kind === 'adminBlank' && typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined') base = ADMIN_BLANK_FEATURE_ITEMS.slice();
     else if (def.kind === 'partPerformance' && typeof PART_PERFORMANCE_ITEMS !== 'undefined') base = PART_PERFORMANCE_ITEMS.slice();
     else if (def.kind === 'ai') {
         const labelHas = (window.AiExplanation && AiExplanation.LABEL_HAS) || '有AI解釋';
@@ -781,6 +795,9 @@ function sortFilterValues(def, values, state) {
 }
 
 function datasetHasFilter(def, questions) {
+    if (def.requiresAdmin && !(window.accessRights && window.accessRights.admin === true)) {
+        return false;
+    }
     if (def.requiresAi && !(window.accessRights && window.accessRights.ai === true)) {
         return false;
     }
@@ -1556,7 +1573,8 @@ function applyStatDimJumpToTri(tri, dimId, rawValue) {
         else if (value === STAT_HAS_PARTS_NONE || value === '沒有分題') {
             tri.feature['沒有分題'] = 'checked';
         } else if (value === STAT_HAS_PARTS_PENDING || value === '尚未輸入分題') {
-            tri.feature['尚未輸入分題'] = 'checked';
+            if (!tri.adminBlank) tri.adminBlank = {};
+            tri.adminBlank['尚未輸入分題'] = 'checked';
         } else if (value === STAT_HAS_PARTS_NO) {
             // Legacy「無分題」bin: match anything without parts (none + pending).
             tri.feature['有分題'] = 'excluded';
@@ -1696,13 +1714,18 @@ async function jumpStatsRowToQuestions(tabId, rawValue) {
 function clearStatsAdminBlankFeatureFilters() {
     const blanks = (typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
         ? ADMIN_BLANK_FEATURE_ITEMS
-        : ['題目空白', '答案空白', '評卷報告空白'];
+        : ['尚未輸入分題', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖'];
     Object.keys(statsFilterState).forEach((key) => {
         const state = statsFilterState[key];
-        if (!state || !state.triState || !state.triState.feature) return;
-        blanks.forEach((item) => {
-            delete state.triState.feature[item];
-        });
+        if (!state || !state.triState) return;
+        // Clear dedicated adminBlank key
+        state.triState.adminBlank = {};
+        // Legacy: blanks may still sit under feature from older sessions
+        if (state.triState.feature) {
+            blanks.forEach((item) => {
+                delete state.triState.feature[item];
+            });
+        }
     });
     if (typeof updateStatsFilterChrome === 'function') {
         try { updateStatsFilterChrome(); } catch (ignore) { /* optional chrome */ }
