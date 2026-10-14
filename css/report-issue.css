@@ -502,3 +502,105 @@ body.report-issue-open {
     padding: 4px 10px;
     font-size: 0.8rem;
 }
+
+
+/* Pending upload queue review / revoke (.35) */
+button.staging-pending-chip-label {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    padding: 0;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 11rem;
+    text-align: left;
+}
+
+.staging-pending-chip .btn-sm {
+    white-space: nowrap;
+}
+
+.staging-pending-queue-overlay {
+    z-index: 12250;
+}
+
+.staging-pending-queue-dialog {
+    width: min(640px, 100%);
+    max-height: min(88vh, 720px);
+}
+
+.staging-pending-queue-body {
+    padding: 12px 18px 8px;
+    overflow: auto;
+    flex: 1;
+    min-height: 120px;
+}
+
+.staging-pending-queue-empty {
+    margin: 12px 0;
+    color: #64748b;
+    font-size: 0.95rem;
+}
+
+.staging-pending-queue-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.staging-pending-queue-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-light, #dde3ea);
+    border-radius: 10px;
+    background: #f8fafc;
+}
+
+.staging-pending-queue-main {
+    min-width: 0;
+    flex: 1;
+}
+
+.staging-pending-queue-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    margin-bottom: 4px;
+}
+
+.staging-pending-queue-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #334155;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.staging-pending-queue-preview {
+    font-size: 0.85rem;
+    color: #475569;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.staging-pending-queue-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 18px 16px;
+    border-top: 1px solid var(--border-light, #dde3ea);
+    background: #fff;
+}

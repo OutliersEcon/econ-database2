@@ -35,9 +35,13 @@ sequenceDiagram
     AS-->>Hub: ok
     Hub->>Mem: removePendingOp
   end
-  alt flush 失敗
-    Hub->>Admin: 錯誤橫幅 + confirm 是否仍關閉
-    Note over Mem: 未完成 op 留本機，可重試
+  alt 單筆失敗（.34 起）
+    Hub->>Hub: console.error + 跳過此 op，繼續其餘
+    Note over Mem: 失敗 op 留本機；成功者已 remove
+  end
+  alt flush 結束仍有失敗
+    Hub->>Admin: 部分完成／全部失敗 toast + confirm 是否仍關閉
+    Note over Mem: 失敗 op 留本機，可重試
   end
 ```
 
@@ -52,7 +56,7 @@ sequenceDiagram
 | **題目 tab ✓／✕（hub 外）** | 同樣先 `enqueuePendingOp`（樂觀 UI）；之後跟 **`readAutoSync()`**（`econ_git_auto_sync`／header「自動同步」checkbox，同 `github-sync.js`） |
 | ↳ 自動同步 **開** | 即刻 `flushPendingOps({ reason: 'auto-sync' })`（經 `enqueueStagingWrite` 防 409）；**唔使開 hub** |
 | ↳ 自動同步 **關** | 留本機 queue；header chip「待上傳審批 N」＋「立即上傳」；或再開自動同步後下次外層操作／手動上傳 |
-| **兩者** | 有 unsynced pending → `beforeunload`；flush 失敗保留 pending＋TC 錯誤＋chip 可重試 |
+| **兩者** | 有 unsynced pending → `beforeunload`；flush **跳過失敗繼續其餘**（.34）；失敗保留 pending＋`console.error`＋TC 錯誤／部分完成 toast＋chip 可重試；chip「檢視佇列」可撤銷單項（.35） |
 
 ### 題目 tab 卡上 ✓／✕（`.30`／`.31`／`.33` preview）
 
@@ -89,6 +93,23 @@ sequenceDiagram
 | 分類欄位 | `CLASS_FIELD_META`：always-eligible vs blank-only | 與 Apps Script／docs 對齊 |
 | 通過後清空欄位 | 需 confirm | 避免誤清 bank |
 | 題目卡審批 | **✓／✕ one-shot**（admin only） | 睇題時快批；邏輯同 hub queue |
+| 待上傳佇列檢視／撤銷（.35） | chip「檢視佇列」／點標籤開 panel；每列「撤銷」 | 上傳前可覆核；`removePendingOp`＋還原 staging＋undo 樂觀 bank |
+| flush 遇失敗 | **跳過該筆、繼續其餘**（.34）；取消覆寫 confirm 亦 skip＋continue | 避免首筆（如 marks=0）卡住整批 0／N |
+| 失敗可觀測性 | 每筆 `console.error('[審批同步失敗]', …)`＋結束摘要 | toast  alone 難排查；DevTools 見 questionId／proposalId／raw |
+| 本機改題後仍失敗 | **預期**：flush 重送 staging `proposalId` approve，**不**帶本機編輯；server 比對提案分題合計 vs **雲端 bank** `marks`；`0` ≠ blank（blank 才自動合計） | 須改雲端總分或清空總分後再上傳；見下方「編輯仍失敗」 |
+
+### 編輯題目後同步仍失敗（Q2）
+
+審批 flush 呼叫 `approveQuestionPartsProposal` 時只帶 **staging `proposalId`**，套用的是雲端 staging 提案，不是題目 tab 本機剛改過的題目內容。伺服器 `validateProposalPartsSum_` 把提案分題分數合計與 **雲端題庫** 該題的 `marks` 比對：空白／非數字總分會自動用分題合計；數值 **包括 0** 則必須相符。因此若雲端 `marks` 仍是 `0`、分題合計是 7，本機把題目改正確後再按「立即上傳」仍會失敗——queued op 未改寫，雲端總分亦未變。正確做法：在雲端題庫把該題總分改成與分題一致，或清空總分（留空）後再上傳；toast 在 marks 不符時會附一句提示。
+
+
+
+### 待上傳佇列檢視／撤銷（.35）
+
+- Header chip「待上傳審批 N」旁有**檢視佇列**；點標籤亦可開 panel。
+- Panel 列出每筆 `pendingOps`：`questionId`、種類（分題／分類）、動作（通過／拒絕／保留原值）、短預覽（`bankSnap`／`values`／`proposalSnap`）。
+- **撤銷**：`removePendingOp(localId)`；若有 `proposalSnap` 則插回 `partsRows`／`classRows`，否則 `ensureStagingCache(true)` 由雲端重拉（提案尚未 flush 仍在 staging）；approve 若有 `undoBankSnap` 則還原本機樂觀題庫套用。
+- 撤銷後刷新 hub 列表（若開著）、題目卡 staging、chip；flush 中不可撤銷。
 
 ## 修改史（決策型）
 
@@ -102,13 +123,17 @@ sequenceDiagram
 | `.31` hub vs 外層同步 | Hub 維持關窗 flush；題目 tab 跟 `readAutoSync` 即時 flush 或留 queue＋chip |
 | `.32` 有未審批事項 filter | admin blank 重用 staging cache／`pendingForQuestion`；唔另造 pending 源 |
 | `.33` 卡上提案預覽 | 黃色 bar 顯示 proposedValues／questionParts（`formatClassList`／`formatPartsPreview`）；✓／✕ 不變 |
+| `.34` flush 跳過失敗 | 單筆失敗／取消覆寫 → `console.error`＋留 pending＋**繼續**其餘；部分完成 toast；marks 不符附總分=0 提示；說明本機編輯≠重寫 approve op |
+| `.35` 待上傳佇列撤銷 | chip「檢視佇列」panel；`proposalSnap`／`undoBankSnap`；單項撤銷還原 staging＋本機 bank |
 
 ## 待辦
 
+- [x] 待上傳佇列檢視／撤銷（.35；chip panel＋單項撤銷＋undo bank／還原 staging）
 - [x] 題目卡 pending 顯示提案內容（.33；分類欄位 diff + 分題 parts preview）
 - [ ] 大批量分類通過時的進度／取消 UX（待核實需求）
 - [ ] issues／AI tab 是否也需要 per-item in-flight／local queue（目前多用 `hubState.busy` 即時雲端）
-- [ ] flush 中「取消其餘」按鈕（而家只暫停喺失敗／取消覆寫）
+- [x] flush 跳過失敗繼續其餘（.34；取消覆寫亦 skip＋continue；未做「取消其餘」按鈕）
+- [ ] flush 中「取消其餘」按鈕（可選）
 - [x] 題目列表「只睇待審批」篩選 → admin「空白／缺漏」**有未審批事項**（.32；`questionFeatureOn`＋`pendingForQuestion`）
 
 ## 文字版 E2E 測試描述
@@ -117,7 +142,7 @@ sequenceDiagram
 2. 對一筆 pending：點「通過」；橫幅應似「已通過（本機）…待同步」；**唔應**等網路即可對另一筆再點通過。  
 3. Soft refresh（F5）後再開 hub：先前本機通過嘅提案唔應再出現喺列表（pending 由 IDB 還原並套用）；橫幅提示待同步。  
 4. 關閉 hub：應見「正在同步至雲端（i／n）」→ 成功訊息；再開 hub／另一瀏覽器應反映雲端已審批。  
-5. 模擬 flush 失敗（斷網後關閉）：應錯誤橫幅、唔宣稱成功；confirm 後可關閉；pending 仍在；恢復網路再關可重試。  
+5. 模擬 flush 失敗（斷網後關閉）：應錯誤橫幅／toast、唔宣稱成功；confirm 後可關閉；pending 仍在；DevTools 見 `[審批同步失敗]`；恢復網路再關可重試。  
 6. 有 pending 時重新整理／關 tab：應觸發瀏覽器 leave warning（`beforeunload`）。  
 7. 單欄：blank-only 且題庫已有值 →「通過此欄」略過／禁用；always-eligible 已有值 → 覆寫確認（喺 enqueue 前）。  
 8. pending ≥200 時應見暫停橫幅；另用 agent 再 submit 一題仍應成功（`paused:true`）。  
@@ -129,5 +154,12 @@ sequenceDiagram
 13. **自動同步關**：卡上 ✓ → 入本機佇列、chip「待上傳審批」；按「立即上傳」或稍後再開自動同步；關頁有 beforeunload。  
 14. Hub 內通過多筆 → **唔**因自動同步而逐點上雲；只喺關 hub 時 flush。  
 15. 同一題分類＋分題：兩行各自 ✓／✕。  
-16. 斷網＋外層自動同步開：flush 失敗 → 錯誤 toast、pending／chip 保留；恢復後「立即上傳」成功。  
+16. 斷網＋外層自動同步開：flush 失敗 → 錯誤 toast、pending／chip 保留；DevTools `console.error('[審批同步失敗]')`；恢復後「立即上傳」成功。  
+18. **跳過失敗繼續**：queue 多筆，首筆故意失敗（例如分題合計 ≠ 雲端 marks=0）→ toast「同步部分完成（已完成 X／Y）」或「失敗 N 項」；其餘成功者已上雲並從 pending 移除；失敗者仍在 chip；`console.error` 有每筆詳情＋摘要。  
+19. **編輯本機題目後重試**：只改本機 marks／分題、唔改雲端 bank → 同一 proposal 仍失敗（見「編輯題目後同步仍失敗」）；改雲端總分或清空總分後再上傳才成功；toast 可含總分=0 提示。  
+20. flush 覆寫 confirm：**取消** → 該筆 skip＋continue（唔中斷整批）；確定覆寫 → 該筆帶 `confirmOverwrite` 重試。  
 17. Admin「空白／缺漏」→「有未審批事項」：列表＝有卡上待審批 chip 之題；✓ 後即離開（未 flush 亦同）；非 admin 唔見此項。
+
+21. **檢視佇列**：本機通過／拒絕數筆後，chip 見「待上傳審批 N」→ 按「檢視佇列」（或點標籤）→ panel 列出 questionId／分題或分類／通過或拒絕／預覽。  
+22. **撤銷**：對一筆按「撤銷」→ 該筆離開 pending／chip 減 1；hub（若開）與題目卡再出現該待審批；若曾本機套用分題／分類，題庫 UI 應回退；其餘佇列項不變。  
+23. flush 進行中：撤銷按鈕應禁用；上傳完畢且佇列空 → panel 顯示沒有待上傳項目。
