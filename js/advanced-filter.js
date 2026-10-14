@@ -70,7 +70,10 @@
     function fieldSelectHtml(selected) {
         var m = Match();
         var fields = (m && m.FIELDS) || [];
-        return fields.map(function (def) {
+        var adminOk = !!(window.accessRights && window.accessRights.admin === true);
+        return fields.filter(function (def) {
+            return !(def.adminOnly && !adminOk);
+        }).map(function (def) {
             var sel = def.id === selected ? ' selected' : '';
             return '<option value="' + escapeAttr(def.id) + '"' + sel + '>' + escapeAttr(def.label) + '</option>';
         }).join('');

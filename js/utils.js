@@ -129,13 +129,53 @@ function populateFeatureFilter() {
         if (state === 'checked') { labelClass += ' checked'; checkboxClass += ' checked'; }
         else if (state === 'excluded') { labelClass += ' excluded'; checkboxClass += ' excluded'; }
 
-        const adminNote = (typeof isAdminBlankFeature === 'function' && isAdminBlankFeature(item))
-            ? ' data-admin-only="1"'
-            : '';
+        html += `
+            <div class="${labelClass}" onclick="toggleTriState(this)" data-filter="feature" data-value="${escapeHTML(item)}">
+                <div class="${checkboxClass}" data-filter="feature" data-value="${escapeHTML(item)}">
+                    <span>${escapeHTML(item)}</span>
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+// Admin-only 「空白／缺漏」 filter (separate from 特徵).
+function populateAdminBlankFilter() {
+    const container = document.getElementById('admin-blank-options');
+    const filterItem = document.getElementById('admin-blank-filter-item');
+    const adminOk = !!(window.accessRights && window.accessRights.admin === true);
+
+    if (filterItem) filterItem.hidden = !adminOk;
+    if (!container) return;
+
+    if (!adminOk) {
+        container.innerHTML = '';
+        if (window.triStateFilters) window.triStateFilters.adminBlank = {};
+        return;
+    }
+
+    if (!window.triStateFilters.adminBlank) window.triStateFilters.adminBlank = {};
+
+    const items = (typeof effectiveAdminBlankItems === 'function')
+        ? effectiveAdminBlankItems()
+        : ((typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
+            ? ADMIN_BLANK_FEATURE_ITEMS.slice()
+            : []);
+
+    let html = '';
+    items.forEach(item => {
+        const state = window.triStateFilters.adminBlank[item];
+
+        let labelClass = 'tri-state-label';
+        let checkboxClass = 'tri-state-checkbox';
+        if (state === 'checked') { labelClass += ' checked'; checkboxClass += ' checked'; }
+        else if (state === 'excluded') { labelClass += ' excluded'; checkboxClass += ' excluded'; }
 
         html += `
-            <div class="${labelClass}" onclick="toggleTriState(this)" data-filter="feature" data-value="${escapeHTML(item)}"${adminNote}>
-                <div class="${checkboxClass}" data-filter="feature" data-value="${escapeHTML(item)}">
+            <div class="${labelClass}" onclick="toggleTriState(this)" data-filter="adminBlank" data-value="${escapeHTML(item)}">
+                <div class="${checkboxClass}" data-filter="adminBlank" data-value="${escapeHTML(item)}">
                     <span>${escapeHTML(item)}</span>
                 </div>
             </div>

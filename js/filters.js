@@ -34,6 +34,7 @@ if (!window.triStateFilters) {
         curriculum: {}, 
         chapter: {}, 
         feature: { 'Out syl': 'excluded' },
+        adminBlank: {},
         partPerformance: {},
         publisher: {},
         exam: {}, 
@@ -50,8 +51,13 @@ if (!window.triStateFilters) {
         table: {},
         calculation: {}
     };
-} else if (!window.triStateFilters.partPerformance) {
-    window.triStateFilters.partPerformance = {};
+} else {
+    if (!window.triStateFilters.partPerformance) {
+        window.triStateFilters.partPerformance = {};
+    }
+    if (!window.triStateFilters.adminBlank) {
+        window.triStateFilters.adminBlank = {};
+    }
 }
 
 // ============================================
@@ -64,6 +70,7 @@ const ARROW_MAP = {
     // Custom Grid Filters
     'curriculum-options': 'curriculum-arrow',
     'feature-options': 'feature-arrow',
+    'admin-blank-options': 'admin-blank-arrow',
     'part-performance-options': 'part-performance-arrow',
     'year-options': 'year-arrow',
     
@@ -193,7 +200,7 @@ function toggleDropdown(dropdownId) {
     closeAllDropdowns();
 
     if (!wasOpen) {
-        const gridFilters = ['curriculum-options', 'feature-options', 'part-performance-options', 'year-options'];
+        const gridFilters = ['curriculum-options', 'feature-options', 'admin-blank-options', 'part-performance-options', 'year-options'];
 
         if (gridFilters.includes(dropdownId)) {
             target.style.display = 'grid';
@@ -251,6 +258,7 @@ window.addEventListener('resize', function () {
     const openIds = [
         'curriculum-options',
         'feature-options',
+        'admin-blank-options',
         'part-performance-options',
         'year-options'
     ];
@@ -390,7 +398,7 @@ function updateFilterIndicators() {
     // use modal trigger badges (filter-modal.js) instead of dot indicators.
     // chapter uses mf-badge-chapter (filter-modal.js) instead of a dot indicator.
     const triStateTypes = [
-        'publisher', 'exam', 'qtype', 'curriculum', 'feature', 'partPerformance', 'year',
+        'publisher', 'exam', 'qtype', 'curriculum', 'feature', 'adminBlank', 'partPerformance', 'year',
         'section', 'paper', 'ai'
     ];
     
@@ -842,6 +850,10 @@ async function updateDynamicDropdowns() {
             }).join('');
         }
     }
+
+    if (typeof populateAdminBlankFilter === 'function') {
+        populateAdminBlankFilter();
+    }
     
     updateFilterIndicators();
 }
@@ -1092,6 +1104,7 @@ function clearFilters() {
         curriculum: {}, 
         chapter: {}, 
         feature: featureDefault,
+        adminBlank: {},
         partPerformance: {},
         publisher: {},
         exam: {}, 
@@ -1262,6 +1275,7 @@ function updateSearchInfo() {
         'curriculum': '課程',
         'chapter': 'Chapter',
         'feature': '特徵',
+        'adminBlank': '空白／缺漏',
         'partPerformance': '分題表現',
         'publisher': '出版商',
         'exam': '考試',

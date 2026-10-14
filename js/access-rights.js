@@ -26,6 +26,7 @@ function applyAccessRights(rights) {
     // Keep CSS gates (AI解釋 filter, card AI buttons) in sync with rights.
     if (document.body) {
         document.body.classList.toggle('poe-ai-allowed', window.accessRights.ai === true);
+        document.body.classList.toggle('admin-blank-allowed', window.accessRights.admin === true);
     }
     if (window.authManager) {
         window.authManager._canViewMockTests = window.accessRights.mockTests;
@@ -45,6 +46,9 @@ function applyAccessRights(rights) {
     }
     if (typeof populateFeatureFilter === 'function') {
         populateFeatureFilter();
+    }
+    if (typeof populateAdminBlankFilter === 'function') {
+        populateAdminBlankFilter();
     }
     if (typeof populateDynamicFilters === 'function') {
         populateDynamicFilters();

@@ -5,7 +5,7 @@
 
 // Printed when the page loads. Bump this on every change so a reader can
 // tell whether the open tab is current. Do not keep a changelog here.
-const APP_VERSION = '2026.10.14.23';
+const APP_VERSION = '2026.10.14.24';
 console.log('Question bank version:', APP_VERSION);
 
 // Integer stamped on shared bank JSON as schemaVersion. Also an app-capability
@@ -90,14 +90,15 @@ const FEATURE_ITEMS = [
     '跨課題',
     '跨章節',
     '有分題',
-    '尚未輸入分題',
     '已刪除',
     'Out syl'
 ];
 
-// Admin-only blank-content feature filters (見 js/question-fields.js).
-// Shown in 特徵 only when accessRights.admin === true.
+// Admin-only blank / missing-data filters (見 js/question-fields.js).
+// Shown in separate 「空白／缺漏」 dropdown when accessRights.admin === true.
+// Not merged into 特徵.
 const ADMIN_BLANK_FEATURE_ITEMS = [
+    '尚未輸入分題',
     '題目空白',
     '答案空白',
     '評卷報告空白',

@@ -32,7 +32,8 @@
         { id: 'publisher', label: '出版商', kind: 'scalar', prop: 'publisher', autocomplete: true },
         { id: 'partPerformance', label: '分題表現', kind: 'partPerformance', autocomplete: true },
         { id: 'partMarks', label: '分題分數', kind: 'partMarks', autocomplete: false },
-        { id: 'feature', label: '特徵', kind: 'feature', autocomplete: true }
+        { id: 'feature', label: '特徵', kind: 'feature', autocomplete: true },
+        { id: 'adminBlank', label: '空白／缺漏', kind: 'adminBlank', autocomplete: true, adminOnly: true }
     ];
 
     var CONDITION_FIELD_BY_ID = {};
@@ -86,6 +87,9 @@
         section: 'section',
         publisher: 'publisher',
         feature: 'feature',
+        adminBlank: 'adminBlank',
+        adminblank: 'adminBlank',
+        '空白／缺漏': 'adminBlank',
         partPerformance: 'partPerformance',
         partperformance: 'partPerformance',
         '分題表現': 'partPerformance',
@@ -216,8 +220,14 @@
                 : false;
         }
         if (def.kind === 'feature') {
-            if (typeof isAdminBlankFeature === 'function' && isAdminBlankFeature(needle) &&
-                !(typeof window !== 'undefined' && window.accessRights && window.accessRights.admin === true)) {
+            // Keep 特徵 clean — admin blank labels belong to adminBlank field.
+            if (typeof isAdminBlankFeature === 'function' && isAdminBlankFeature(needle)) {
+                return false;
+            }
+            return featureIsOn(question, needle);
+        }
+        if (def.kind === 'adminBlank') {
+            if (!(typeof window !== 'undefined' && window.accessRights && window.accessRights.admin === true)) {
                 return false;
             }
             return featureIsOn(question, needle);
@@ -255,6 +265,20 @@
                 var text = String(item == null ? '' : item).trim();
                 if (text) set[text] = true;
             });
+        }
+        if (def.kind === 'adminBlank') {
+            var adminOk = !!(typeof window !== 'undefined' && window.accessRights && window.accessRights.admin === true);
+            if (adminOk) {
+                var blanks = (typeof effectiveAdminBlankItems === 'function')
+                    ? effectiveAdminBlankItems()
+                    : ((typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
+                        ? ADMIN_BLANK_FEATURE_ITEMS
+                        : []);
+                blanks.forEach(function (item) {
+                    var text = String(item == null ? '' : item).trim();
+                    if (text) set[text] = true;
+                });
+            }
         }
         if (def.kind === 'partPerformance' && typeof PART_PERFORMANCE_ITEMS !== 'undefined' && Array.isArray(PART_PERFORMANCE_ITEMS)) {
             PART_PERFORMANCE_ITEMS.forEach(function (item) {
