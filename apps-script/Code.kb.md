@@ -30,6 +30,7 @@ sequenceDiagram
 - Blank-only 欄位：題庫已有值 → `blank_only_filled`（`confirmOverwrite` 無效）  
 - Always-eligible：已有值或 `reviewedByAI==='Y'` → 需 `confirmOverwrite`  
 - 分題提案：平行的 `proposeQuestionParts`／`approveQuestionPartsProposal` 路徑
+- **`.37` `flushStagingApprovals`**：mixed parts＋class approve／reject；**validate-all → 每檔一次寫**；cap **50**；整批一個 `takeGitSlot_`＋script lock；`needsConfirm` 唔寫；提案已消失 → `noop`；**marks=0 非 blank**
 
 ## 架構取捨／決策
 
@@ -39,11 +40,13 @@ sequenceDiagram
 | Soft pause | ≥**200** pending 仍接受 | 不堵 agent；提醒協調者 |
 | 大檔讀取 | 短命 read token + 直打 GitHub | 避開 Apps Script 回傳體積／逾時 |
 | 寫入 | 一律 Apps Script + `GITHUB_TOKEN` | 前端永不持寫入 PAT |
+| Hub flush 批次（.37） | `flushStagingApprovals` 一鎖驗證後寫 | 避免 N 次 commit／半寫 bank；rate limit 以整批計 |
 | 單檔 Code.gs | 維持單檔 + 地圖註解 | 部署簡單；用 banner 導航 |
 
 ## Deploy／clasp
 
 - **scriptId（bound 專案）：** `1M1CO1YpfpzSHL7n8g5H-8zpxAP0diXLXkss0Bf6a-5UtsNwOElZTfFx_`  
+- **Web app deployment id（／exec）：** `AKfycbyWyuSs8FIpga0fwy8z8A3IGqE3T51FE24Ak3xuLawj5GmD81p3PwvDQjIRzLhIa53y`（改 Code.gs 後需 New version／clasp redeploy）  
 - 合併改到 `Code.gs` 後必須 **Manage deployments → Edit → New version**（保留同一 `/exec` URL），或 `clasp push` 後部署新版本。  
 - **只改 Script properties** → 立即生效；**改程式碼** → 舊 deployment 仍跑舊碼。  
 - 註解-only 變更可不 redeploy（無 runtime 差）。
@@ -56,6 +59,7 @@ sequenceDiagram
 | Soft pause 200 | backlog 信號而非硬拒 |
 | Approve 多分欄／blank-only | 與前端 hub 對齊 |
 | Shard-aware bank patch | 與 Phase 3 上傳模型一致 |
+| flushStagingApprovals | validate-all；ok 一次寫 bank／proposals；cap 50 |
 
 ## 待辦
 
