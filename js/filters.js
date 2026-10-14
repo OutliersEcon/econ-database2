@@ -165,8 +165,11 @@ function closeAllDropdowns() {
         clearFilterDropdownPosition(d);
     });
 
-    ['curriculum', 'feature', 'partPerformance', 'year'].forEach(type => {
-        const sectionId = type === 'partPerformance' ? 'part-performance-options' : `${type}-options`;
+    ['curriculum', 'feature', 'adminBlank', 'partPerformance', 'year'].forEach(type => {
+        let sectionId;
+        if (type === 'partPerformance') sectionId = 'part-performance-options';
+        else if (type === 'adminBlank') sectionId = 'admin-blank-options';
+        else sectionId = `${type}-options`;
         const section = document.getElementById(sectionId);
         if (section) {
             section.style.display = 'none';
@@ -1050,6 +1053,8 @@ function clearFilters() {
     });
     const partPerfSection = document.getElementById('part-performance-options');
     if (partPerfSection) partPerfSection.style.display = 'none';
+    const adminBlankSection = document.getElementById('admin-blank-options');
+    if (adminBlankSection) adminBlankSection.style.display = 'none';
 
     closeAllDropdowns();
 
