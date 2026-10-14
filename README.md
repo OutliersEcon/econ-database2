@@ -55,7 +55,7 @@ Filter UI label: 🧩 題幹模式 (modal tri-state picker, same include / exclu
 
 Derived from reviewing live values in the bank:
 
-- Prefer an exact existing vocabulary string when the question shape matches. The canonical Excel set of 78 templates is still all in use; highest-frequency strings are the safest choices.
+- Prefer an exact existing **classification-index** / vocabulary string when the question shape matches (living source: private `shared/data/classification-index.json`; seek neighbors via `exemplarIds`). The canonical Excel set of 78 templates is still all in use; highest-frequency strings are the safest choices.
 - Abstract concrete detail with placeholders: (某人), (某事件), (某物品), (某市場), (某廠商). Use blanks as ___________. Use full-width slash ／ for alternatives (e.g. 增加／減低).
 - One reusable ask per template. Do not lock a template to hotel / concert / tunnel story details or to personal names.
 - Do not put format tags (patterns) or lone concept names into stemPatterns.
@@ -135,7 +135,7 @@ Form / 批量編輯 can still edit parts directly on the bank. Redeploy Apps Scr
 
 **Only write path for classification:** 分類專員 → staging → 審批與回報 → 分類審批. Retired Python batch entry points: `archive/classification-python/`.
 
-AI / review bots must **not** write `concepts` or `stemPatterns` straight into `database.json`. They call Apps Script `submitClassificationProposal` (`admin` or `githubSync`), which upserts pending rows in `shared/data/classification-proposals.json` (one pending proposal per `questionId`). Always-eligible fields: `concepts`, `stemPatterns`, `patterns`, `graphType`, `tableType`, `calculationType`, `multipleSelectionType`. Blank-only (empty bank only): `AristochapterClassification`, `curriculumClassification`, `questionParts`. **Submit never touches the bank.**
+AI / review bots must **not** write `concepts` or `stemPatterns` straight into `database.json`. Before proposing, consult `classification-index.json` neighbors; `reason` optional; new labels allowed when no precedent. They call Apps Script `submitClassificationProposal` (`admin` or `githubSync`), which upserts pending rows in `shared/data/classification-proposals.json` (one pending proposal per `questionId`). Always-eligible fields: `concepts`, `stemPatterns`, `patterns`, `graphType`, `tableType`, `calculationType`, `multipleSelectionType`. Blank-only (empty bank only): `AristochapterClassification`, `curriculumClassification`, `questionParts`. **Submit never touches the bank.**
 
 **Soft warn at 200:** when pending count ≥ 200, submit still accepts new `questionId`s and returns `{ ok:true, paused:true, pendingCount, pauseThreshold:200, message }` as a reminder for agents. The admin **分類審批** tab shows a warning banner when the backlog is at the threshold. Coordinator briefs 分類專員 when the soft pause is active.
 
@@ -247,3 +247,4 @@ Details: `docs/classification-proposals.md`.
 Old entry points (`apply_stem_patterns_import.py`, `auto_assign_stem_patterns.py`, `fuzzy_assign_stem_patterns.py`, `merge_stem_pattern_classifications.py`, `classify_chunks/`, and any local “how to run classify” that wrote the DB) are **retired**. Inventory and policy: **`archive/classification-python/`**. Those files were documented under `scripts/` but were never shipped in this public tree; do not reintroduce them as live writers.
 
 **Still keep:** `vocabulary.json` + concept/stem conventions, writing-rule / tip notes in this README and `_readme_stem_stats.md`, validation/reconciliation in the app (`js/data-checks.js`, stats), and historical `reviewedByAI Y` samples. stemPatterns updates for reviewed rows remain additive when applied through admin approve or in-app edit — never a wipe-and-replace from a batch builder.
+\n
