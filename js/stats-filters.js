@@ -1714,7 +1714,7 @@ async function jumpStatsRowToQuestions(tabId, rawValue) {
 function clearStatsAdminBlankFeatureFilters() {
     const blanks = (typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
         ? ADMIN_BLANK_FEATURE_ITEMS
-        : ['尚未輸入分題', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖'];
+        : ['尚未輸入分題', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖', '課程分類空白', '章節空白'];
     Object.keys(statsFilterState).forEach((key) => {
         const state = statsFilterState[key];
         if (!state || !state.triState) return;

@@ -37,7 +37,7 @@
 
     var ADMIN_BLANK_FEATURES = (typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
         ? ADMIN_BLANK_FEATURE_ITEMS.slice()
-        : ['尚未輸入分題', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖'];
+        : ['尚未輸入分題', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖', '課程分類空白', '章節空白'];
 
     function isBlankText(value) {
         if (value === null || value === undefined) return true;
@@ -578,6 +578,31 @@
     }
 
     /** graphType suggests a figure, but inlineDiagrams is empty. */
+    // 課程分類空白: missing/empty array, or only placeholder 未分類 / blank / '-'
+    // (no real curriculum codes such as A–J / E1 / E2).
+    function isCurriculumClassificationBlank(question) {
+        if (!question) return true;
+        var list = question.curriculumClassification;
+        if (!Array.isArray(list) || list.length === 0) return true;
+        for (var i = 0; i < list.length; i++) {
+            var text = String(list[i] == null ? '' : list[i]).trim();
+            if (text && text !== '-' && text !== '未分類') return false;
+        }
+        return true;
+    }
+
+    // 章節空白: missing or empty AristochapterClassification.
+    function isChapterClassificationBlank(question) {
+        if (!question) return true;
+        var list = question.AristochapterClassification;
+        if (!Array.isArray(list) || list.length === 0) return true;
+        for (var i = 0; i < list.length; i++) {
+            var text = String(list[i] == null ? '' : list[i]).trim();
+            if (text && text !== '-') return false;
+        }
+        return true;
+    }
+
     function questionNeedsInlineDiagram(question) {
         var gt = String((question && question.graphType) || '').trim();
         if (!gt || gt === '-' || gt === '沒有圖') return false;
@@ -614,6 +639,8 @@
         if (value === '缺內嵌圖') return questionNeedsInlineDiagram(q);
         if (value === '缺原題圖片') return questionMissingOriginalQuestion(q);
         if (value === '缺答案原圖') return questionMissingOriginalAnswer(q);
+        if (value === '課程分類空白') return isCurriculumClassificationBlank(q);
+        if (value === '章節空白') return isChapterClassificationBlank(q);
         return false;
     }
 
@@ -689,6 +716,8 @@
     global.questionHasInlineDiagrams = questionHasInlineDiagrams;
     global.questionHasOriginalQuestion = questionHasOriginalQuestion;
     global.questionHasOriginalAnswer = questionHasOriginalAnswer;
+    global.isCurriculumClassificationBlank = isCurriculumClassificationBlank;
+    global.isChapterClassificationBlank = isChapterClassificationBlank;
     global.questionNeedsInlineDiagram = questionNeedsInlineDiagram;
     global.questionMissingOriginalQuestion = questionMissingOriginalQuestion;
     global.questionMissingOriginalAnswer = questionMissingOriginalAnswer;

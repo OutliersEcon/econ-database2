@@ -5,7 +5,7 @@
 
 // Printed when the page loads. Bump this on every change so a reader can
 // tell whether the open tab is current. Do not keep a changelog here.
-const APP_VERSION = '2026.10.14.24';
+const APP_VERSION = '2026.10.14.25';
 console.log('Question bank version:', APP_VERSION);
 
 // Integer stamped on shared bank JSON as schemaVersion. Also an app-capability
@@ -104,7 +104,9 @@ const ADMIN_BLANK_FEATURE_ITEMS = [
     '評卷報告空白',
     '缺內嵌圖',
     '缺原題圖片',
-    '缺答案原圖'
+    '缺答案原圖',
+    '課程分類空白',
+    '章節空白'
 ];
 
 // Per-part performance labels (exact values stored on questionParts[].performance).
