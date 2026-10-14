@@ -1,5 +1,7 @@
 # econ-database — Agent notes / AI 代理說明
 
+> **For AI agents:** start at [`AGENTS.md`](AGENTS.md) (module map + hard rules), then the colocated `*.kb.md` next to the code you touch. Convention: [`docs/agent-knowledge-convention.md`](docs/agent-knowledge-convention.md).
+
 ## Purpose / 用途
 
 First-bank JSON question database for HKDSE / related Economics past papers.
