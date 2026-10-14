@@ -698,7 +698,7 @@
             showCardStagingToast(text);
             return;
         }
-        if ((reason === 'manual' || reason === 'auto-sync')
+        if ((reason === 'manual' || reason === 'auto-sync' || reason === 'hub-close')
             && kind === 'info' && String(text || '').indexOf('（0／') !== -1) {
             showCardStagingToast(text);
         }
@@ -1051,8 +1051,11 @@
         if (!hubOverlay) return;
         hubOverlay.hidden = true;
         hubState.selected = {};
-        hubState.busy = false;
-        hubState.inFlight = Object.create(null);
+        // Keep busy/inFlight if a background flush is running (hub-close fire-and-forget).
+        if (!hubState.flushing) {
+            hubState.busy = false;
+            hubState.inFlight = Object.create(null);
+        }
         if (global.AiExplanation && typeof AiExplanation.closeAdminPanel === 'function') {
             AiExplanation.closeAdminPanel();
         }
@@ -1811,22 +1814,17 @@
         syncBulkButton();
     }
 
-    async function closeFeedbackHub() {
+    function closeFeedbackHub() {
         if (!hubOverlay || hubOverlay.hidden) return;
-        if (hubState.flushing) return;
-        if (hasUnsyncedPending()) {
-            var flushed = await flushPendingOps();
-            if (!flushed) {
-                var leave = global.confirm
-                    ? global.confirm(
-                        '尚有 ' + pendingCount() + ' 項審批未同步至雲端。'
-                        + '關閉後會保留在本機（重新整理亦然），下次關閉視窗可再試。仍要關閉？'
-                    )
-                    : false;
-                if (!leave) return;
-            }
-        }
+        // Hide immediately — never await flush or block on hubState.flushing.
+        // Pending upload continues in the background; chip/toast/beforeunload still apply.
+        var shouldFlush = hasUnsyncedPending();
         hideFeedbackHubUi();
+        if (shouldFlush) {
+            flushPendingOps({ reason: 'hub-close' }).catch(function (err) {
+                console.error('[審批同步] hub-close flush failed', err);
+            });
+        }
     }
 
     async function openFeedbackHub() {
