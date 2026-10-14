@@ -210,7 +210,7 @@ const STAT_TABS = {
                 : false);
         }
     }),
-    partPerformance: makeStatDim('partPerformance', '分題表現', {
+    partPerformance: makeStatDim('partPerformance', '考生表現', {
         groupKey: 'partPerformance',
         valuesOf(q) {
             const parts = (typeof normalizeQuestionParts === 'function')
@@ -411,7 +411,7 @@ const STAT_FILTER_DEFS = [
     { key: 'publisher', label: '🏢 出版商', kind: 'publisher', hideOn: ['publishers'] },
     { key: 'feature', label: '🎯 特徵', kind: 'feature', hideOn: ['feature', 'hasParts'] },
     { key: 'adminBlank', label: '空白／缺漏', kind: 'adminBlank', requiresAdmin: true },
-    { key: 'partPerformance', label: '📈 分題表現', kind: 'partPerformance', hideOn: ['partPerformance'] },
+    { key: 'partPerformance', label: '📈 考生表現', kind: 'partPerformance', hideOn: ['partPerformance'] },
     { key: 'graph', label: '📊 圖表類型', kind: 'scalar', field: 'graphType', optional: true, hideOn: ['graph'] },
     { key: 'table', label: '📅 表格類型', kind: 'scalar', field: 'tableType', optional: true, hideOn: ['table'] },
     { key: 'calculation', label: '🧮 計算類型', kind: 'scalar', field: 'calculationType', optional: true, hideOn: ['calculation'] },
@@ -1714,7 +1714,7 @@ async function jumpStatsRowToQuestions(tabId, rawValue) {
 function clearStatsAdminBlankFeatureFilters() {
     const blanks = (typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
         ? ADMIN_BLANK_FEATURE_ITEMS
-        : ['尚未輸入分題', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖', '課程分類空白', '章節空白'];
+        : ['尚未輸入分題', '未輸入考生表現', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖', '課程分類空白', '章節空白'];
     Object.keys(statsFilterState).forEach((key) => {
         const state = statsFilterState[key];
         if (!state || !state.triState) return;

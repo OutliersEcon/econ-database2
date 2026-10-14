@@ -1281,7 +1281,7 @@ function updateSearchInfo() {
         'chapter': 'Chapter',
         'feature': '特徵',
         'adminBlank': '空白／缺漏',
-        'partPerformance': '分題表現',
+        'partPerformance': '考生表現',
         'publisher': '出版商',
         'exam': '考試',
         'qtype': '題型',

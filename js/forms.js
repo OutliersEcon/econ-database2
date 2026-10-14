@@ -96,7 +96,7 @@ function questionPartRowHtml(part) {
         <div class="question-part-row" data-question-part-row="1" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">
             <input type="text" data-part-label placeholder="分題（如 a）" value="${escapeHTML(String(label))}" style="width:5.5em;">
             <input type="number" data-part-marks min="0" step="0.5" placeholder="分數" value="${marks === '' ? '' : escapeHTML(String(marks))}" style="width:6em;">
-            <select data-part-performance aria-label="分題表現">${partPerformanceOptionsHtml(performance)}</select>
+            <select data-part-performance aria-label="考生表現">${partPerformanceOptionsHtml(performance)}</select>
             <button type="button" class="btn btn-secondary btn-sm" onclick="removeQuestionPartRow(this)" title="移除分題">✕</button>
         </div>
     `;

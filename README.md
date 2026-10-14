@@ -22,7 +22,7 @@ Top-level tabs are **題目** and **統計** (not separate 概念 / 課程分類
 Then:
 
 - **一維瀏覽** — dimension switcher + cards. **交叉分析** — row/column axes. Both share one registry (`STAT_TABS` / `STAT_DIMENSION_GROUPS` in `js/stats-filters.js`). Groups: 主題標籤 | 試卷／表現／特徵 | 區間／衍生.
-- Priority dims: 年份 / 考試 / 卷別 / Section / 題目類型 / 特徵 (admin blank features only when admin) / 分題表現 / 圖表·表格·計算·複選類型 (hidden when unused) / 出版商 + original 概念·課程·章節·題型·題幹模式.
+- Priority dims: 年份 / 考試 / 卷別 / Section / 題目類型 / 特徵 (admin blank features only when admin) / 考生表現 / 圖表·表格·計算·複選類型 (hidden when unused) / 出版商 + original 概念·課程·章節·題型·題幹模式.
 - Binned: 答對率區間 `[0,20)…[80,100]`, 分數區間 `0–2…16+`, 題號區間 from id last digits `1–10…51–60` (plus 無* buckets). Jump uses matching range filters; empty buckets use id-set.
 - Derived: 年份種類（日曆年 / Mock(MT) / 其他）, 分題狀態（有分題／沒有分題／尚未輸入分題）, 選項設計（skip if unused）. **Not** a grouping dim: AI解釋 (filter only; `requiresAi`).
 - Cards have **詳細統計** and **查看題目**; crosstab cell click jumps with intersection filters. Local aggregation only (`js/stats-explore.js`).
@@ -98,11 +98,11 @@ Independent modal (`js/stem-pattern-review.js`), entry **題幹模式檢視** on
 
 **進階篩選** (`js/advanced-filter.js`) is an independent modal on the 題目 tab for every signed-in user. Rows are 包含／不包括 + field + value (AND), using the same `ConditionMatch` fields as 資料檢查. Applied conditions live in `window.advancedFilter` and intersect with search, tri-state, and range filters in `storage.applyFilters`. Local-only: memory and optional `localStorage` key `econ_advanced_filter_v1` for this browser — no GitHub / Apps Script / `syncDataChecks*` persistence. Clear with the green badge ✕, the modal’s **清除進階篩選**, or **重置篩選條件** (full reset). Bulk ID-set filters from 資料檢查 clear the same way (badge type 題目集合 / full reset).
 
-**字串** field searches 題目（`questionTextChi` / `questionTextEng` / `plainText`）、答案（`answerMC` / `answerChi` / `answerEng`）、評卷報告（`markersReportChi` / `markersReportEng`）. Saved rows with `field: 'text'` keep working. Also available: **分題表現** / **分題分數** against `questionParts`.
+**字串** field searches 題目（`questionTextChi` / `questionTextEng` / `plainText`）、答案（`answerMC` / `answerChi` / `answerEng`）、評卷報告（`markersReportChi` / `markersReportEng`）. Saved rows with `field: 'text'` keep working. Also available: **考生表現** / **分題分數** against `questionParts`.
 
 ## 分題 / questionParts + partsStatus
 
-SQ/LQ sub-parts store as `questionParts: [{ label, marks, performance }, …]` (`SCHEMA_VERSION` 2). **`marks` (total) stays authoritative** — the form does not auto-sum parts into total. When one or more parts exist, **every part must have numeric `marks` and `sum(part.marks)` must equal total `marks`** (tolerance `0.001`; see `validatePartMarksSum` in `js/question-fields.js`). Empty/absent parts skip the sum check. Validation runs on the single-question form and the admin **批量編輯** modal. `performance` values are exactly: 優異、優良、良好、令人滿意、尚可、欠佳. Filters: 特徵 **有分題**; dropdown **分題表現**; advanced **分題表現** / **分題分數**.
+SQ/LQ sub-parts store as `questionParts: [{ label, marks, performance }, …]` (`SCHEMA_VERSION` 2). **`marks` (total) stays authoritative** — the form does not auto-sum parts into total. When one or more parts exist, **every part must have numeric `marks` and `sum(part.marks)` must equal total `marks`** (tolerance `0.001`; see `validatePartMarksSum` in `js/question-fields.js`). Empty/absent parts skip the sum check. Validation runs on the single-question form and the admin **批量編輯** modal. `performance` values are exactly: 優異、優良、良好、令人滿意、尚可、欠佳. Filters: 特徵 **有分題**; dropdown **考生表現**; advanced **考生表現** / **分題分數**.
 
 **`partsStatus`** (`pending` \| `none` \| `filled`, `SCHEMA_VERSION` 4) distinguishes 尚未輸入分題 vs 沒有分題 vs 有分題. Nonempty `questionParts` → `filled`. Legacy empty/absent `questionParts` without an explicit status resolves as **`pending`** (not confirmed none). Form radios and stats「分題狀態」use this field. Filter modal「尚未輸入」sentinel is blank/`-`/empty array only; stored values like「沒有圖」「並非複選型」remain confirmed-none options for other feature fields.
 
