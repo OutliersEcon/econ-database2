@@ -5,7 +5,7 @@
 
 // Printed when the page loads. Bump this on every change so a reader can
 // tell whether the open tab is current. Do not keep a changelog here.
-const APP_VERSION = '2026.10.15.31';
+const APP_VERSION = '2026.10.15.32';
 console.log('Question bank version:', APP_VERSION);
 
 // Integer stamped on shared bank JSON as schemaVersion. Also an app-capability
@@ -100,6 +100,7 @@ const FEATURE_ITEMS = [
 const ADMIN_BLANK_FEATURE_ITEMS = [
     '尚未輸入分題',
     '未輸入考生表現',
+    '有未審批事項',
     '題目空白',
     '答案空白',
     '評卷報告空白',

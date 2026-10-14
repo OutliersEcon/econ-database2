@@ -488,6 +488,8 @@
         }
         updatePendingChrome();
         refreshQuestionCardStaging();
+        // No maybeRefreshPendingStagingFilter: this runs inside ensureStagingCache
+        // load (would deadlock on stagingCacheInflight). Card/hub approve hooks refresh.
     }
 
     async function lookupLocalQuestion(questionId) {
@@ -727,6 +729,29 @@
         };
     }
 
+    function isStagingCacheReady() {
+        return !!hubState.stagingCacheReady;
+    }
+
+    /** True when adminBlank「有未審批事項」is checked or excluded. */
+    function pendingStagingFilterActive() {
+        var map = global.triStateFilters && global.triStateFilters.adminBlank;
+        if (!map) return false;
+        var st = map['有未審批事項'];
+        return st === 'checked' || st === 'excluded';
+    }
+
+    /** Re-run 題目 list when「有未審批事項」filter is on (chip hide ↔ filter). */
+    function maybeRefreshPendingStagingFilter() {
+        if (!pendingStagingFilterActive()) return;
+        if (typeof global.filterQuestions === 'function') {
+            try {
+                var ret = global.filterQuestions();
+                if (ret && typeof ret.then === 'function') ret.catch(function () {});
+            } catch (ignore) {}
+        }
+    }
+
     function stagingActionsHtml(questionId) {
         if (!hasAdminAccess()) return '';
         if (!hubState.stagingCacheReady && !hubState.partsRows.length && !hubState.classRows.length) {
@@ -817,6 +842,8 @@
         }, 4200);
     }
 
+    var stagingCacheInflight = null;
+
     async function ensureStagingCache(force) {
         if (!hasAdminAccess()) {
             hubState.stagingCacheReady = false;
@@ -825,10 +852,13 @@
             refreshQuestionCardStaging();
             return;
         }
-        if (hubState.stagingCacheLoading) return;
         if (hubState.stagingCacheReady && !force) {
             refreshQuestionCardStaging();
             return;
+        }
+        // Coalesce concurrent callers (filterQuestions + init) onto one load.
+        if (stagingCacheInflight && !force) {
+            return stagingCacheInflight;
         }
         // If hub already loaded rows this session and not forcing, reuse.
         if (!force && (hubState.partsRows.length || hubState.classRows.length)
@@ -838,50 +868,56 @@
         }
         hubState.stagingCacheLoading = true;
         hubState.stagingCacheError = '';
-        try {
-            await loadPendingOpsFromDisk();
-            var results = await Promise.all([
-                proxyAction({ action: 'listQuestionPartsProposals' }, 60000).catch(function (err) {
-                    return { ok: false, error: err && err.code };
-                }),
-                proxyAction({ action: 'listClassificationProposals' }, 60000).catch(function (err) {
-                    return { ok: false, error: err && err.code };
-                })
-            ]);
-            var parts = results[0];
-            var klass = results[1];
-            // Only overwrite hub lists when hub overlay is closed or empty load —
-            // when hub is open mid-edit, prefer hub's fresher loadHubData.
-            var hubOpen = hubOverlay && !hubOverlay.hidden;
-            if (!hubOpen || force) {
-                if (parts && parts.ok && Array.isArray(parts.rows)) {
-                    hubState.partsRows = parts.rows;
+        stagingCacheInflight = (async function () {
+            try {
+                await loadPendingOpsFromDisk();
+                var results = await Promise.all([
+                    proxyAction({ action: 'listQuestionPartsProposals' }, 60000).catch(function (err) {
+                        return { ok: false, error: err && err.code };
+                    }),
+                    proxyAction({ action: 'listClassificationProposals' }, 60000).catch(function (err) {
+                        return { ok: false, error: err && err.code };
+                    })
+                ]);
+                var parts = results[0];
+                var klass = results[1];
+                // Only overwrite hub lists when hub overlay is closed or empty load —
+                // when hub is open mid-edit, prefer hub's fresher loadHubData.
+                var hubOpen = hubOverlay && !hubOverlay.hidden;
+                if (!hubOpen || force) {
+                    if (parts && parts.ok && Array.isArray(parts.rows)) {
+                        hubState.partsRows = parts.rows;
+                    }
+                    if (klass && klass.ok && Array.isArray(klass.rows)) {
+                        hubState.classRows = klass.rows;
+                        hubState.classPendingCount = (typeof klass.pendingCount === 'number')
+                            ? klass.pendingCount
+                            : hubState.classRows.length;
+                        hubState.classPauseThreshold = (typeof klass.pauseThreshold === 'number')
+                            ? klass.pauseThreshold
+                            : (hubState.classPauseThreshold || 200);
+                        hubState.classPaused = !!(klass.paused === true)
+                            || hubState.classPendingCount >= hubState.classPauseThreshold;
+                    }
+                    applyPendingOpsToLoadedRows();
                 }
-                if (klass && klass.ok && Array.isArray(klass.rows)) {
-                    hubState.classRows = klass.rows;
-                    hubState.classPendingCount = (typeof klass.pendingCount === 'number')
-                        ? klass.pendingCount
-                        : hubState.classRows.length;
-                    hubState.classPauseThreshold = (typeof klass.pauseThreshold === 'number')
-                        ? klass.pauseThreshold
-                        : (hubState.classPauseThreshold || 200);
-                    hubState.classPaused = !!(klass.paused === true)
-                        || hubState.classPendingCount >= hubState.classPauseThreshold;
+                hubState.stagingCacheReady = true;
+                if ((!parts || parts.ok !== true) && (!klass || klass.ok !== true)) {
+                    hubState.stagingCacheError = errorMessage(
+                        (parts && parts.error) || (klass && klass.error)
+                    );
                 }
-                applyPendingOpsToLoadedRows();
+            } catch (err) {
+                hubState.stagingCacheError = errorMessage(err && err.code);
+            } finally {
+                hubState.stagingCacheLoading = false;
+                stagingCacheInflight = null;
+                refreshQuestionCardStaging();
+                // Do not call maybeRefreshPendingStagingFilter here: filterQuestions
+                // awaits this function and would re-enter. Approve／reject paths call it.
             }
-            hubState.stagingCacheReady = true;
-            if ((!parts || parts.ok !== true) && (!klass || klass.ok !== true)) {
-                hubState.stagingCacheError = errorMessage(
-                    (parts && parts.error) || (klass && klass.error)
-                );
-            }
-        } catch (err) {
-            hubState.stagingCacheError = errorMessage(err && err.code);
-        } finally {
-            hubState.stagingCacheLoading = false;
-            refreshQuestionCardStaging();
-        }
+        })();
+        return stagingCacheInflight;
     }
 
     async function handleCardStagingAction(op, kind, proposalId, questionId) {
@@ -908,6 +944,7 @@
             await rejectClassificationProposal(pid);
         }
         refreshQuestionCardStaging(questionId);
+        maybeRefreshPendingStagingFilter();
         if (pendingCount() <= beforePending) return;
         // Outside hub: honour「自動同步」. Hub path never uses this handler.
         if (isGitAutoSyncOn()) {
@@ -1503,6 +1540,7 @@
             renderHubList();
             updatePendingChrome();
             refreshQuestionCardStaging();
+            maybeRefreshPendingStagingFilter();
         }
     }
 
@@ -1939,6 +1977,7 @@
         renderHubList();
         updatePendingChrome();
         refreshQuestionCardStaging();
+        maybeRefreshPendingStagingFilter();
     }
 
     async function rejectPartsProposal(proposalId) {
@@ -1979,6 +2018,7 @@
         renderHubList();
         updatePendingChrome();
         refreshQuestionCardStaging();
+        maybeRefreshPendingStagingFilter();
     }
 
     async function deleteAiExplanationFromHub(questionId, explanationId) {
@@ -2326,6 +2366,7 @@
         renderHubList();
         updatePendingChrome();
         refreshQuestionCardStaging();
+        maybeRefreshPendingStagingFilter();
     }
 
     async function rejectClassificationProposal(proposalId, options) {
@@ -2374,6 +2415,7 @@
         renderHubList();
         updatePendingChrome();
         refreshQuestionCardStaging();
+        maybeRefreshPendingStagingFilter();
     }
 
     async function bulkApproveClassification() {
@@ -2649,6 +2691,8 @@
         STATUS_LABELS: STATUS_LABELS,
         hasAdminAccess: hasAdminAccess,
         pendingForQuestion: pendingForQuestion,
+        isStagingCacheReady: isStagingCacheReady,
+        pendingStagingFilterActive: pendingStagingFilterActive,
         stagingActionsHtml: stagingActionsHtml,
         refreshQuestionCardStaging: refreshQuestionCardStaging,
         ensureStagingCache: ensureStagingCache,
