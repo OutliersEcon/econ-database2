@@ -26,9 +26,11 @@ sequenceDiagram
   Hub->>BankIDB: scheduleLocalBankApply（樂觀套用）
   Note over Hub: 可即刻點下一筆；beforeunload 若有 pending
 
-  Admin->>Hub: 關閉 hub modal
-  Hub->>Hub: flushPendingOps（串列）
-  loop each pending op
+  Admin->>Hub: 關閉 hub modal（一次點擊）
+  Hub->>Hub: hideFeedbackHubUi 立即（不 await）
+  Hub-->>Admin: modal 已關
+  Hub->>Hub: flushPendingOps({ reason: 'hub-close' }) fire-and-forget（.36）
+  loop each pending op（背景）
     Hub->>Q: enqueueStagingWrite
     Q->>AS: approve*／reject*
     AS->>GH: patch bank shards + staging
@@ -39,10 +41,7 @@ sequenceDiagram
     Hub->>Hub: console.error + 跳過此 op，繼續其餘
     Note over Mem: 失敗 op 留本機；成功者已 remove
   end
-  alt flush 結束仍有失敗
-    Hub->>Admin: 部分完成／全部失敗 toast + confirm 是否仍關閉
-    Note over Mem: 失敗 op 留本機，可重試
-  end
+  Note over Admin,Hub: 進度／錯誤經 toast + chip；仍有 unsynced → beforeunload
 ```
 
 - **批量通過**（`bulkApprove*`）仍即時打雲端；若本機仍有 pending，會提示先關閉同步。
@@ -52,11 +51,11 @@ sequenceDiagram
 
 | 場景 | 行為 |
 | --- | --- |
-| **Hub「審批與回報」內** | local-first（`.29`）：approve／reject → `pendingOps`；**唔**逐點上雲；**關閉 modal** 時串列 `flushPendingOps`；關窗失敗／仍有 pending → in-app confirm |
+| **Hub「審批與回報」內** | local-first（`.29`）：approve／reject → `pendingOps`；**唔**逐點上雲；**關閉 modal** 立即 hide，背景 `flushPendingOps({ reason: 'hub-close' })`（`.36`）；**唔** await／**唔** disable 關閉；進度／錯誤經 toast+chip；unsynced 仍 `beforeunload` |
 | **題目 tab ✓／✕（hub 外）** | 同樣先 `enqueuePendingOp`（樂觀 UI）；之後跟 **`readAutoSync()`**（`econ_git_auto_sync`／header「自動同步」checkbox，同 `github-sync.js`） |
 | ↳ 自動同步 **開** | 即刻 `flushPendingOps({ reason: 'auto-sync' })`（經 `enqueueStagingWrite` 防 409）；**唔使開 hub** |
 | ↳ 自動同步 **關** | 留本機 queue；header chip「待上傳審批 N」＋「立即上傳」；或再開自動同步後下次外層操作／手動上傳 |
-| **兩者** | 有 unsynced pending → `beforeunload`；flush **跳過失敗繼續其餘**（.34）；失敗保留 pending＋`console.error`＋TC 錯誤／部分完成 toast＋chip 可重試；chip「檢視佇列」可撤銷單項（.35） |
+| **兩者** | 有 unsynced pending → `beforeunload`；flush **跳過失敗繼續其餘**（.34）；失敗保留 pending＋`console.error`＋TC 錯誤／部分完成 toast＋chip 可重試；chip「檢視佇列」可撤銷單項（.35）；hub 關窗背景 flush（.36） |
 
 ### 題目 tab 卡上 ✓／✕（`.30`／`.31`／`.33` preview）
 
