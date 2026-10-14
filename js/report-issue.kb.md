@@ -44,6 +44,15 @@ sequenceDiagram
 - **批量通過**（`bulkApprove*`）仍即時打雲端；若本機仍有 pending，會提示先關閉同步。
 - Soft refresh／關頁：pending 存 `EconFeedbackHubPending`（IndexedDB；失敗時 fallback `localStorage`）。
 
+### 題目 tab 卡上 ✓／✕（`.30`）
+
+- Admin（`rights.admin`，同可開「審批與回報」）先 `ensureStagingCache` 拉 `listClassificationProposals`／`listQuestionPartsProposals`。
+- 有 pending 嘅題目卡喺 `回報問題` 按鈕列上方顯示「待審批分類」同／或「待審批分題」＋✓／✕；無 pending → 唔加 UI。
+- ✓／✕ = **整單通過／拒絕**（同 hub「通過全部欄位」／「全部保留原值」或分題 approve／reject）；重用 `approve*Proposal`／`reject*Proposal` → `enqueuePendingOp`；**唔**做 per-field。
+- 拒絕仍用 hub 既有 `confirm`；覆寫／清空確認一樣喺 enqueue 前。
+- Toast：`已加入本機佇列，關閉「審批與回報」或稍後會上傳`。Flush 時機不變（關 hub／下次關 hub 重試；`beforeunload` 警告）。
+- `ReportIssue.stagingActionsHtml`／`handleCardStagingAction`／`refreshQuestionCardStaging` 畀 `render.js`／`main.js` 用。
+
 ### Soft pause banner
 
 - `classPendingCount >= classPauseThreshold`（預設 **200**）→ 顯示暫停橫幅  
@@ -64,6 +73,7 @@ sequenceDiagram
 | 整 hub `busy` 擋到 IDB | **否**（PR #78 起） | 本機 getAll 慢 |
 | 分類欄位 | `CLASS_FIELD_META`：always-eligible vs blank-only | 與 Apps Script／docs 對齊 |
 | 通過後清空欄位 | 需 confirm | 避免誤清 bank |
+| 題目卡審批 | **✓／✕ one-shot**（admin only） | 睇題時快批；邏輯同 hub queue |
 
 ## 修改史（決策型）
 
@@ -73,12 +83,14 @@ sequenceDiagram
 | 多分欄 approve | 每欄「通過此欄／保留原值」；partial 留下剩餘欄 |
 | PR #78（`.28`） | **Approve unlock**：staging 成功即解鎖；IDB apply 背景化；寫入佇列＋per-proposal in-flight |
 | `.29` local-first | **Approve／reject 先入本機 queue**；關 hub 先 flush；IDB 持久化；`beforeunload`；多 admin staleness 接受 |
+| `.30` 題目卡 ✓／✕ | 題目 tab 卡對 pending 分類／分題 one-shot 入同一 pendingOps；無 pending 唔顯示 |
 
 ## 待辦
 
 - [ ] 大批量分類通過時的進度／取消 UX（待核實需求）
 - [ ] issues／AI tab 是否也需要 per-item in-flight／local queue（目前多用 `hubState.busy` 即時雲端）
 - [ ] flush 中「取消其餘」按鈕（而家只暫停喺失敗／取消覆寫）
+- [ ] 題目列表「只睇待審批」篩選（跟進）
 
 ## 文字版 E2E 測試描述
 

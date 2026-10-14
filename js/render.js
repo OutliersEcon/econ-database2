@@ -391,7 +391,7 @@ async function renderQuestions() {
             : q.section;
 
         return `
-        <div class="question-card">
+        <div class="question-card" data-question-id="${escapeHTML(q.id)}">
             <div class="question-header">
                 <div class="question-title">
                     ${escapeHTML(q.id)}
@@ -529,6 +529,8 @@ async function renderQuestions() {
                 
             </div>
             
+            ${(typeof ReportIssue !== 'undefined' && ReportIssue.stagingActionsHtml
+                ? ReportIssue.stagingActionsHtml(q.id) : '')}
             <div class="question-card-actions" style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap;">
                 <button type="button" class="btn btn-outline-primary question-report-issue" data-action="report-issue" data-id="${escapeHTML(q.id)}" title="回報問題">回報問題</button>
                 <button type="button" class="btn btn-outline-primary question-ai-explain" data-action="ai-explain" data-id="${escapeHTML(q.id)}" title="AI解釋">AI解釋</button>

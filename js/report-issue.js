@@ -85,7 +85,11 @@
         pendingOps: [],
         flushing: false,
         loading: false,
-        error: ''
+        error: '',
+        // Lightweight staging lists for 題目 tab ✓/✕ (shared with hub when loaded).
+        stagingCacheReady: false,
+        stagingCacheLoading: false,
+        stagingCacheError: ''
     };
 
     function stagingActionKey(kind, proposalId) {
@@ -348,6 +352,7 @@
             }
         }
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function lookupLocalQuestion(questionId) {
@@ -536,6 +541,224 @@
         if (!global.authManager || !global.authManager.currentUser) return '';
         return String(global.authManager.currentUser).trim().toLowerCase();
     }
+
+
+    // --- 題目 tab in-card staging approve/reject (admin) ---
+
+    function findPartsRowByQuestionId(questionId) {
+        var qid = String(questionId || '');
+        if (!qid) return null;
+        var rows = hubState.partsRows || [];
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i] && String(rows[i].questionId || '') === qid) return rows[i];
+        }
+        return null;
+    }
+
+    function findClassRowByQuestionId(questionId) {
+        var qid = String(questionId || '');
+        if (!qid) return null;
+        var rows = hubState.classRows || [];
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i] && String(rows[i].questionId || '') === qid) return rows[i];
+        }
+        return null;
+    }
+
+    function pendingForQuestion(questionId) {
+        if (!hasAdminAccess()) return { classRow: null, partsRow: null };
+        return {
+            classRow: findClassRowByQuestionId(questionId),
+            partsRow: findPartsRowByQuestionId(questionId)
+        };
+    }
+
+    function stagingActionsHtml(questionId) {
+        if (!hasAdminAccess()) return '';
+        if (!hubState.stagingCacheReady && !hubState.partsRows.length && !hubState.classRows.length) {
+            return '';
+        }
+        var pending = pendingForQuestion(questionId);
+        var bits = [];
+        if (pending.classRow && pending.classRow.id) {
+            bits.push(
+                '<div class="question-staging-row" data-staging-kind="class">'
+                + '<span class="question-staging-label">待審批分類</span>'
+                + '<button type="button" class="question-staging-btn is-approve" data-action="staging-approve"'
+                + ' data-kind="class" data-proposal-id="' + esc(pending.classRow.id) + '"'
+                + ' data-id="' + esc(questionId) + '" title="通過全部欄位（本機佇列）">✓</button>'
+                + '<button type="button" class="question-staging-btn is-reject" data-action="staging-reject"'
+                + ' data-kind="class" data-proposal-id="' + esc(pending.classRow.id) + '"'
+                + ' data-id="' + esc(questionId) + '" title="全部保留原值（本機佇列）">✕</button>'
+                + '</div>'
+            );
+        }
+        if (pending.partsRow && pending.partsRow.id) {
+            bits.push(
+                '<div class="question-staging-row" data-staging-kind="parts">'
+                + '<span class="question-staging-label">待審批分題</span>'
+                + '<button type="button" class="question-staging-btn is-approve" data-action="staging-approve"'
+                + ' data-kind="parts" data-proposal-id="' + esc(pending.partsRow.id) + '"'
+                + ' data-id="' + esc(questionId) + '" title="通過分題提案（本機佇列）">✓</button>'
+                + '<button type="button" class="question-staging-btn is-reject" data-action="staging-reject"'
+                + ' data-kind="parts" data-proposal-id="' + esc(pending.partsRow.id) + '"'
+                + ' data-id="' + esc(questionId) + '" title="拒絕分題提案（本機佇列）">✕</button>'
+                + '</div>'
+            );
+        }
+        if (!bits.length) return '';
+        return '<div class="question-staging-actions" data-question-id="' + esc(questionId) + '">'
+            + bits.join('')
+            + '</div>';
+    }
+
+    function refreshQuestionCardStaging(questionId) {
+        var grid = document.getElementById('question-grid');
+        if (!grid) return;
+        var cards = grid.querySelectorAll('.question-card');
+        var onlyId = questionId != null && questionId !== '' ? String(questionId) : null;
+        for (var i = 0; i < cards.length; i++) {
+            var card = cards[i];
+            var qid = String(card.getAttribute('data-question-id') || '');
+            if (!qid) {
+                var reportBtn = card.querySelector('[data-action="report-issue"]');
+                qid = reportBtn ? String(reportBtn.getAttribute('data-id') || '') : '';
+            }
+            if (!qid) continue;
+            if (onlyId && qid !== onlyId) continue;
+            var html = stagingActionsHtml(qid);
+            var host = card.querySelector('.question-staging-actions');
+            if (!html) {
+                if (host) host.remove();
+                continue;
+            }
+            if (host) {
+                host.outerHTML = html;
+            } else {
+                var actions = card.querySelector('.question-card-actions');
+                if (actions) {
+                    actions.insertAdjacentHTML('beforebegin', html);
+                }
+            }
+        }
+    }
+
+    var cardToastTimer = null;
+    function showCardStagingToast(message) {
+        var el = document.getElementById('question-staging-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'question-staging-toast';
+            el.className = 'question-staging-toast';
+            el.setAttribute('role', 'status');
+            document.body.appendChild(el);
+        }
+        el.textContent = String(message || '');
+        el.hidden = !message;
+        el.classList.add('is-visible');
+        if (cardToastTimer) clearTimeout(cardToastTimer);
+        cardToastTimer = setTimeout(function () {
+            el.classList.remove('is-visible');
+            el.hidden = true;
+        }, 4200);
+    }
+
+    async function ensureStagingCache(force) {
+        if (!hasAdminAccess()) {
+            hubState.stagingCacheReady = false;
+            hubState.partsRows = [];
+            hubState.classRows = [];
+            refreshQuestionCardStaging();
+            return;
+        }
+        if (hubState.stagingCacheLoading) return;
+        if (hubState.stagingCacheReady && !force) {
+            refreshQuestionCardStaging();
+            return;
+        }
+        // If hub already loaded rows this session and not forcing, reuse.
+        if (!force && (hubState.partsRows.length || hubState.classRows.length)
+            && hubState.stagingCacheReady) {
+            refreshQuestionCardStaging();
+            return;
+        }
+        hubState.stagingCacheLoading = true;
+        hubState.stagingCacheError = '';
+        try {
+            await loadPendingOpsFromDisk();
+            var results = await Promise.all([
+                proxyAction({ action: 'listQuestionPartsProposals' }, 60000).catch(function (err) {
+                    return { ok: false, error: err && err.code };
+                }),
+                proxyAction({ action: 'listClassificationProposals' }, 60000).catch(function (err) {
+                    return { ok: false, error: err && err.code };
+                })
+            ]);
+            var parts = results[0];
+            var klass = results[1];
+            // Only overwrite hub lists when hub overlay is closed or empty load —
+            // when hub is open mid-edit, prefer hub's fresher loadHubData.
+            var hubOpen = hubOverlay && !hubOverlay.hidden;
+            if (!hubOpen || force) {
+                if (parts && parts.ok && Array.isArray(parts.rows)) {
+                    hubState.partsRows = parts.rows;
+                }
+                if (klass && klass.ok && Array.isArray(klass.rows)) {
+                    hubState.classRows = klass.rows;
+                    hubState.classPendingCount = (typeof klass.pendingCount === 'number')
+                        ? klass.pendingCount
+                        : hubState.classRows.length;
+                    hubState.classPauseThreshold = (typeof klass.pauseThreshold === 'number')
+                        ? klass.pauseThreshold
+                        : (hubState.classPauseThreshold || 200);
+                    hubState.classPaused = !!(klass.paused === true)
+                        || hubState.classPendingCount >= hubState.classPauseThreshold;
+                }
+                applyPendingOpsToLoadedRows();
+            }
+            hubState.stagingCacheReady = true;
+            if ((!parts || parts.ok !== true) && (!klass || klass.ok !== true)) {
+                hubState.stagingCacheError = errorMessage(
+                    (parts && parts.error) || (klass && klass.error)
+                );
+            }
+        } catch (err) {
+            hubState.stagingCacheError = errorMessage(err && err.code);
+        } finally {
+            hubState.stagingCacheLoading = false;
+            refreshQuestionCardStaging();
+        }
+    }
+
+    async function handleCardStagingAction(op, kind, proposalId, questionId) {
+        if (!hasAdminAccess() || hubState.flushing) return;
+        var k = String(kind || '');
+        var action = String(op || '');
+        var pid = String(proposalId || '');
+        if (!pid || (k !== 'class' && k !== 'parts')) return;
+        // Ensure row is in hubState (cache may be stale after hub-only edits).
+        if (k === 'parts' && !findPartsRow(pid)) {
+            await ensureStagingCache(true);
+        }
+        if (k === 'class' && !findClassRow(pid)) {
+            await ensureStagingCache(true);
+        }
+        var beforePending = pendingCount();
+        if (k === 'parts' && action === 'approve') {
+            await approvePartsProposal(pid);
+        } else if (k === 'parts' && action === 'reject') {
+            await rejectPartsProposal(pid);
+        } else if (k === 'class' && action === 'approve') {
+            await approveClassificationProposal(pid);
+        } else if (k === 'class' && action === 'reject') {
+            await rejectClassificationProposal(pid);
+        }
+        refreshQuestionCardStaging(questionId);
+        if (pendingCount() > beforePending) {
+            showCardStagingToast('已加入本機佇列，關閉「審批與回報」或稍後會上傳');
+        }
+    }
+
 
     function hasAdminAccess() {
         var rights = (typeof currentAccessRights === 'function')
@@ -778,7 +1001,13 @@
         if (!button) return;
         var allowed = hasAdminAccess();
         button.hidden = !allowed;
-        if (!allowed) closeFeedbackHub();
+        if (!allowed) {
+            closeFeedbackHub();
+            hubState.stagingCacheReady = false;
+            refreshQuestionCardStaging();
+            return;
+        }
+        ensureStagingCache(false).catch(function () {});
     }
 
     function ensureHubOverlay() {
@@ -1105,10 +1334,12 @@
             hubState.error = errorMessage(err && err.code);
         } finally {
             hubState.loading = false;
+            hubState.stagingCacheReady = true;
             applyPendingOpsToLoadedRows();
             syncHubChrome();
             renderHubList();
             updatePendingChrome();
+            refreshQuestionCardStaging();
         }
     }
 
@@ -1544,6 +1775,7 @@
         syncBulkButton();
         renderHubList();
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function rejectPartsProposal(proposalId) {
@@ -1583,6 +1815,7 @@
         syncBulkButton();
         renderHubList();
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function deleteAiExplanationFromHub(questionId, explanationId) {
@@ -1929,6 +2162,7 @@
         syncHubChrome();
         renderHubList();
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function rejectClassificationProposal(proposalId, options) {
@@ -1976,6 +2210,7 @@
         syncHubChrome();
         renderHubList();
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function bulkApproveClassification() {
@@ -2226,8 +2461,14 @@
     function initReportIssueFeature() {
         bindEscape();
         syncBeforeUnloadGuard();
-        loadPendingOpsFromDisk().catch(function () {});
-        refreshHubButton();
+        loadPendingOpsFromDisk().then(function () {
+            refreshHubButton();
+            if (hasAdminAccess()) {
+                return ensureStagingCache(false);
+            }
+        }).catch(function () {
+            refreshHubButton();
+        });
     }
 
     global.ReportIssue = {
@@ -2237,7 +2478,13 @@
         refreshHubButton: refreshHubButton,
         init: initReportIssueFeature,
         TAG_DEFS: TAG_DEFS,
-        STATUS_LABELS: STATUS_LABELS
+        STATUS_LABELS: STATUS_LABELS,
+        hasAdminAccess: hasAdminAccess,
+        pendingForQuestion: pendingForQuestion,
+        stagingActionsHtml: stagingActionsHtml,
+        refreshQuestionCardStaging: refreshQuestionCardStaging,
+        ensureStagingCache: ensureStagingCache,
+        handleCardStagingAction: handleCardStagingAction
     };
     global.openReportIssueModal = openReportModal;
     global.initReportIssueFeature = initReportIssueFeature;

@@ -461,6 +461,28 @@ function setupEventListeners() {
                 return;
             }
             
+            const stagingApproveBtn = target.closest('[data-action="staging-approve"]');
+            if (stagingApproveBtn) {
+                const proposalId = stagingApproveBtn.getAttribute('data-proposal-id');
+                const kind = stagingApproveBtn.getAttribute('data-kind');
+                const id = stagingApproveBtn.getAttribute('data-id');
+                if (window.ReportIssue && typeof ReportIssue.handleCardStagingAction === 'function') {
+                    ReportIssue.handleCardStagingAction('approve', kind, proposalId, id);
+                }
+                return;
+            }
+
+            const stagingRejectBtn = target.closest('[data-action="staging-reject"]');
+            if (stagingRejectBtn) {
+                const proposalId = stagingRejectBtn.getAttribute('data-proposal-id');
+                const kind = stagingRejectBtn.getAttribute('data-kind');
+                const id = stagingRejectBtn.getAttribute('data-id');
+                if (window.ReportIssue && typeof ReportIssue.handleCardStagingAction === 'function') {
+                    ReportIssue.handleCardStagingAction('reject', kind, proposalId, id);
+                }
+                return;
+            }
+
             const reportIssueBtn = target.closest('[data-action="report-issue"]');
             if (reportIssueBtn) {
                 const id = reportIssueBtn.getAttribute('data-id');
