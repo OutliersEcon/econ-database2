@@ -37,7 +37,7 @@
 
     var ADMIN_BLANK_FEATURES = (typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
         ? ADMIN_BLANK_FEATURE_ITEMS.slice()
-        : ['尚未輸入分題', '未輸入考生表現', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖', '課程分類空白', '章節空白'];
+        : ['尚未輸入分題', '未輸入考生表現', '有未審批事項', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖', '課程分類空白', '章節空白'];
 
     function isBlankText(value) {
         if (value === null || value === undefined) return true;
@@ -631,6 +631,24 @@
         });
     }
 
+    // 有未審批事項: pending classification and/or parts staging (same source as
+    // question-tab ✓／✕ via ReportIssue.pendingForQuestion / staging cache).
+    // If staging cache is not ready yet, treat as no match (callers that need
+    // accurate results should await ensureStagingCache first — see filters.js).
+    function questionHasPendingStaging(question) {
+        if (!question || !isAdminUser()) return false;
+        var RI = global.ReportIssue;
+        if (!RI || typeof RI.pendingForQuestion !== 'function') return false;
+        if (typeof RI.isStagingCacheReady === 'function' && !RI.isStagingCacheReady()) {
+            return false;
+        }
+        var pending = RI.pendingForQuestion(question.id);
+        if (!pending) return false;
+        var hasClass = !!(pending.classRow && pending.classRow.id);
+        var hasParts = !!(pending.partsRow && pending.partsRow.id);
+        return hasClass || hasParts;
+    }
+
     // Shared 特徵 matcher for 題目 filters, 統計, and ConditionMatch.
     // Lives here (before condition-match.js) so advanced filter / data-checks
     // do not need a duplicate fallback body.
@@ -648,6 +666,7 @@
         if (value === '沒有分題') return questionPartsConfirmedNone(q);
         if (value === '尚未輸入分題') return questionPartsPending(q);
         if (value === '未輸入考生表現') return isCandidatePerformanceBlank(q);
+        if (value === '有未審批事項') return questionHasPendingStaging(q);
         if (value === '題目空白') return isQuestionTextBlank(q);
         if (value === '答案空白') return isAnswerBlank(q);
         if (value === '評卷報告空白') return isMarkersReportBlank(q);
@@ -697,6 +716,7 @@
     global.isAnswerBlank = isAnswerBlank;
     global.isMarkersReportBlank = isMarkersReportBlank;
     global.isCandidatePerformanceBlank = isCandidatePerformanceBlank;
+    global.questionHasPendingStaging = questionHasPendingStaging;
     global.isAdminBlankFeature = isAdminBlankFeature;
     global.effectiveFeatureItems = effectiveFeatureItems;
     global.effectiveAdminBlankItems = effectiveAdminBlankItems;

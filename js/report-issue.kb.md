@@ -61,6 +61,7 @@ sequenceDiagram
 - ✓／✕ = one-shot 整單通過／拒絕（重用 hub `approve*Proposal`／`reject*Proposal`）；**唔**做 per-field。
 - 外層入口：`handleCardStagingAction`（讀 `isGitAutoSyncOn()` → `readAutoSync`）。
 - `ReportIssue.stagingActionsHtml`／`refreshQuestionCardStaging` 畀 `render.js`／`main.js`。
+- Admin「空白／缺漏」**有未審批事項**（.32）：`questionFeatureOn` → `pendingForQuestion`；`filterQuestions` 會 `await ensureStagingCache`；本機 approve 後列／chip 一齊消失。
 
 ### Soft pause banner
 
@@ -95,13 +96,14 @@ sequenceDiagram
 | `.29` local-first | **Approve／reject 先入本機 queue**；關 hub 先 flush；IDB 持久化；`beforeunload`；多 admin staleness 接受 |
 | `.30` 題目卡 ✓／✕ | 題目 tab 卡對 pending 分類／分題 one-shot 入同一 pendingOps；無 pending 唔顯示 |
 | `.31` hub vs 外層同步 | Hub 維持關窗 flush；題目 tab 跟 `readAutoSync` 即時 flush 或留 queue＋chip |
+| `.32` 有未審批事項 filter | admin blank 重用 staging cache／`pendingForQuestion`；唔另造 pending 源 |
 
 ## 待辦
 
 - [ ] 大批量分類通過時的進度／取消 UX（待核實需求）
 - [ ] issues／AI tab 是否也需要 per-item in-flight／local queue（目前多用 `hubState.busy` 即時雲端）
 - [ ] flush 中「取消其餘」按鈕（而家只暫停喺失敗／取消覆寫）
-- [ ] 題目列表「只睇待審批」篩選（跟進）
+- [x] 題目列表「只睇待審批」篩選 → admin「空白／缺漏」**有未審批事項**（.32；`questionFeatureOn`＋`pendingForQuestion`）
 
 ## 文字版 E2E 測試描述
 
@@ -121,4 +123,5 @@ sequenceDiagram
 13. **自動同步關**：卡上 ✓ → 入本機佇列、chip「待上傳審批」；按「立即上傳」或稍後再開自動同步；關頁有 beforeunload。  
 14. Hub 內通過多筆 → **唔**因自動同步而逐點上雲；只喺關 hub 時 flush。  
 15. 同一題分類＋分題：兩行各自 ✓／✕。  
-16. 斷網＋外層自動同步開：flush 失敗 → 錯誤 toast、pending／chip 保留；恢復後「立即上傳」成功。
+16. 斷網＋外層自動同步開：flush 失敗 → 錯誤 toast、pending／chip 保留；恢復後「立即上傳」成功。  
+17. Admin「空白／缺漏」→「有未審批事項」：列表＝有卡上待審批 chip 之題；✓ 後即離開（未 flush 亦同）；非 admin 唔見此項。

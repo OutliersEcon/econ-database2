@@ -1374,6 +1374,19 @@ async function filterQuestions() {
         }
     }
 
+    // 「有未審批事項」needs staging cache (same as question-tab ✓／✕).
+    // Await load so checked／excluded evaluation is not empty／all until ready.
+    const adminBlankMap = window.triStateFilters && window.triStateFilters.adminBlank;
+    const pendingStagingState = adminBlankMap && adminBlankMap['有未審批事項'];
+    if ((pendingStagingState === 'checked' || pendingStagingState === 'excluded')
+        && window.accessRights && window.accessRights.admin === true
+        && typeof ReportIssue !== 'undefined' && ReportIssue
+        && typeof ReportIssue.ensureStagingCache === 'function') {
+        try {
+            await ReportIssue.ensureStagingCache(false);
+        } catch (ignore) {}
+    }
+
     updateFilterIndicators();
     
     await updateDynamicDropdowns();
