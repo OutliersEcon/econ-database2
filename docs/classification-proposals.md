@@ -90,3 +90,21 @@ Admin → **回饋／回報 → 分類審批**:
 ## Redeploy
 
 After merging app changes that touch `apps-script/Code.gs`, paste into the bound Apps Script project and **Manage deployments → Edit → New version** (keep the same `/exec` URL), or `clasp push` + deploy new version when clasp is configured.
+
+## Living classification index (neighbors)
+
+Classifiers (**分類專員**) should consult the living index in the private data repo before proposing:
+
+- **File:** `econ-database-data` / `shared/data/classification-index.json` (auto-derived; rebuild after approve batches)
+- **SOP:** `shared/data/CLASSIFICATION_INDEX_SOP.md`
+- **Legacy:** `vocabulary.json` is a flat snapshot only - prefer the index for counts + `exemplarIds`
+
+### Classifier rules (2026-10-14)
+
+1. **Seek neighbors** - load index labels and sample exemplar / same curriculum·chapter questions when classifying.
+2. **Prefer canonical** labels from the index when a match exists.
+3. **New values allowed** - if no good precedent, create a clear new concept / stemPattern / pattern / graphType / tableType / calculationType / multipleSelectionType; set `confidence` appropriately.
+4. **`reason` is optional** - omit when empty; do not invent filler. Schema validation must not require it.
+5. **`nearestExamples` (optional)** - question ids consulted as neighbors may be included for reviewers; not required.
+6. Write path unchanged: only `submitClassificationProposal` to staging; never write the bank or the index by hand.
+\n
