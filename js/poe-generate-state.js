@@ -43,7 +43,7 @@ var PoeGenerate = {};
     Poe.POE_INSTRUCTION = Poe.POE_GENERATION_MODES[0].prompt;
     // Matches 用戶設定 system default for Poe when no saved model.
     Poe.POE_DEFAULT_MODEL = 'GPT-6.1-Sol';
-    Poe.POE_MODELS = ['Claude-Sonnet-5.5', 'GPT-6.1-Sol', 'Gemini-3.8-Flash', 'GLM-5.3-flash', 'GLM-5.3'];
+    Poe.POE_MODELS = ['Claude-Sonnet-5.5', 'GPT-6.1-Sol', 'Gemini-3.8-Flash', 'Gemini-4-Argon', 'GLM-5.3-flash', 'GLM-5.3'];
     Poe.OPENROUTER_DEFAULT_MODEL = 'openai/gpt-4o-mini';
     Poe.OPENROUTER_MODELS = [
         'openai/gpt-4o-mini',
