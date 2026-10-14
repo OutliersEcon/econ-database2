@@ -81,6 +81,9 @@
         // waiting for IndexedDB getAll + filter/list re-render.
         inFlight: Object.create(null),
         _writeChain: Promise.resolve(),
+        // Local-first staging approve/reject ops; flushed to cloud when hub closes.
+        pendingOps: [],
+        flushing: false,
         loading: false,
         error: ''
     };
@@ -122,6 +125,399 @@
     function scheduleLocalBankApply(promise) {
         if (!promise || typeof promise.then !== 'function') return;
         promise.catch(function () {});
+    }
+
+    var PENDING_DB_NAME = 'EconFeedbackHubPending';
+    var PENDING_DB_VERSION = 1;
+    var PENDING_STORE = 'ops';
+    var beforeUnloadBound = false;
+    var pendingPersistChain = Promise.resolve();
+
+    function pendingCount() {
+        return (hubState.pendingOps || []).length;
+    }
+
+    function hasUnsyncedPending() {
+        return pendingCount() > 0;
+    }
+
+    function makeLocalOpId() {
+        return 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+    }
+
+    function openPendingDb() {
+        return new Promise(function (resolve, reject) {
+            if (!global.indexedDB) {
+                reject(new Error('no_indexeddb'));
+                return;
+            }
+            var req = global.indexedDB.open(PENDING_DB_NAME, PENDING_DB_VERSION);
+            req.onupgradeneeded = function () {
+                var db = req.result;
+                if (!db.objectStoreNames.contains(PENDING_STORE)) {
+                    db.createObjectStore(PENDING_STORE, { keyPath: 'localId' });
+                }
+            };
+            req.onsuccess = function () { resolve(req.result); };
+            req.onerror = function () { reject(req.error || new Error('idb_open_failed')); };
+        });
+    }
+
+    function persistPendingOps() {
+        var snapshot = (hubState.pendingOps || []).map(function (op) {
+            try {
+                return JSON.parse(JSON.stringify(op));
+            } catch (ignore) {
+                return op;
+            }
+        });
+        pendingPersistChain = pendingPersistChain.then(function () {
+            return openPendingDb().then(function (db) {
+                return new Promise(function (resolve, reject) {
+                    var tx = db.transaction(PENDING_STORE, 'readwrite');
+                    var store = tx.objectStore(PENDING_STORE);
+                    store.clear();
+                    snapshot.forEach(function (op) { store.put(op); });
+                    tx.oncomplete = function () {
+                        try { db.close(); } catch (ignore) {}
+                        try {
+                            global.localStorage.removeItem('econ.feedbackHub.pendingOps');
+                        } catch (ignore2) {}
+                        resolve();
+                    };
+                    tx.onerror = function () {
+                        try { db.close(); } catch (ignore) {}
+                        reject(tx.error || new Error('idb_write_failed'));
+                    };
+                });
+            }).catch(function () {
+                try {
+                    global.localStorage.setItem(
+                        'econ.feedbackHub.pendingOps',
+                        JSON.stringify(snapshot)
+                    );
+                } catch (ignore) {}
+            });
+        }, function () {});
+        syncBeforeUnloadGuard();
+        return pendingPersistChain;
+    }
+
+    async function loadPendingOpsFromDisk() {
+        var loaded = null;
+        try {
+            var db = await openPendingDb();
+            loaded = await new Promise(function (resolve, reject) {
+                var tx = db.transaction(PENDING_STORE, 'readonly');
+                var req = tx.objectStore(PENDING_STORE).getAll();
+                req.onsuccess = function () {
+                    try { db.close(); } catch (ignore) {}
+                    resolve(req.result || []);
+                };
+                req.onerror = function () {
+                    try { db.close(); } catch (ignore) {}
+                    reject(req.error);
+                };
+            });
+        } catch (ignore) {
+            try {
+                var raw = global.localStorage.getItem('econ.feedbackHub.pendingOps');
+                if (raw) loaded = JSON.parse(raw);
+            } catch (ignore2) {}
+        }
+        if (!Array.isArray(loaded)) loaded = [];
+        hubState.pendingOps = loaded.filter(function (op) {
+            return op && op.localId && op.kind && op.op;
+        });
+        syncBeforeUnloadGuard();
+        return hubState.pendingOps;
+    }
+
+    function enqueuePendingOp(op) {
+        var entry = Object.assign({ localId: makeLocalOpId(), enqueuedAt: new Date().toISOString() }, op || {});
+        if (!Array.isArray(hubState.pendingOps)) hubState.pendingOps = [];
+        hubState.pendingOps.push(entry);
+        persistPendingOps();
+        updatePendingChrome();
+        return entry;
+    }
+
+    function removePendingOp(localId) {
+        hubState.pendingOps = (hubState.pendingOps || []).filter(function (op) {
+            return !(op && String(op.localId) === String(localId));
+        });
+        persistPendingOps();
+        updatePendingChrome();
+    }
+
+    function syncBeforeUnloadGuard() {
+        if (beforeUnloadBound) return;
+        beforeUnloadBound = true;
+        global.addEventListener('beforeunload', function (event) {
+            if (!hasUnsyncedPending()) return;
+            event.preventDefault();
+            event.returnValue = '';
+        });
+    }
+
+    function updatePendingChrome() {
+        if (!hubOverlay || hubOverlay.hidden) return;
+        if (hubState.flushing || hubState.busy) return;
+        var n = pendingCount();
+        if (n <= 0) return;
+        var st = document.getElementById('feedback-hub-status');
+        var cur = st ? String(st.textContent || '') : '';
+        // Keep a fresh per-action ok/warn message; only fill empty or prior pending hint.
+        if (cur && cur.indexOf('本機待同步') !== 0 && cur.indexOf('已通過（本機）') !== 0
+            && cur.indexOf('已拒絕（本機）') !== 0 && cur.indexOf('已保留原值（本機）') !== 0
+            && cur.indexOf('已全部保留原值（本機）') !== 0) {
+            return;
+        }
+        if (cur.indexOf('已通過（本機）') === 0 || cur.indexOf('已拒絕（本機）') === 0
+            || cur.indexOf('已保留原值（本機）') === 0 || cur.indexOf('已全部保留原值（本機）') === 0) {
+            setHubBanner(cur.replace(/ — 關閉視窗時同步雲端.*/, '') + ' — 本機待同步 ' + n + ' 項', 'ok');
+            return;
+        }
+        setHubBanner('本機待同步：' + n + ' 項（關閉視窗時寫入雲端）', 'info');
+    }
+
+    function computeClassRemaining(row, removedFields) {
+        if (!row) return null;
+        var removeSet = {};
+        (removedFields || []).forEach(function (f) { removeSet[String(f)] = true; });
+        var fields = (Array.isArray(row.fields) ? row.fields : []).filter(function (f) {
+            return !removeSet[String(f)];
+        });
+        if (!fields.length) return null;
+        var proposedValues = {};
+        var currentValues = {};
+        fields.forEach(function (f) {
+            if (row.proposedValues && Object.prototype.hasOwnProperty.call(row.proposedValues, f)) {
+                proposedValues[f] = row.proposedValues[f];
+            }
+            if (row.currentValues && Object.prototype.hasOwnProperty.call(row.currentValues, f)) {
+                currentValues[f] = row.currentValues[f];
+            }
+        });
+        return Object.assign({}, row, {
+            fields: fields,
+            proposedValues: proposedValues,
+            currentValues: currentValues
+        });
+    }
+
+    function applyPendingOpsToLoadedRows() {
+        var ops = hubState.pendingOps || [];
+        for (var i = 0; i < ops.length; i++) {
+            var op = ops[i];
+            if (!op) continue;
+            if (op.kind === 'parts') {
+                hubState.partsRows = (hubState.partsRows || []).filter(function (item) {
+                    return !(item && String(item.id) === String(op.proposalId));
+                });
+                delete hubState.selected[String(op.proposalId || '')];
+            } else if (op.kind === 'class') {
+                if (Object.prototype.hasOwnProperty.call(op, 'proposalRemaining')) {
+                    applyClassProposalRemaining(op.proposalId, op.proposalRemaining);
+                } else if (op.op === 'reject' && !(op.rejectFields && op.rejectFields.length)) {
+                    applyClassProposalRemaining(op.proposalId, null);
+                } else if (op.op === 'approve' && Array.isArray(op.approveFields)) {
+                    var row = findClassRow(op.proposalId);
+                    if (row) {
+                        applyClassProposalRemaining(
+                            op.proposalId,
+                            computeClassRemaining(row, op.approveFields)
+                        );
+                    }
+                } else if (op.op === 'reject' && Array.isArray(op.rejectFields)) {
+                    var row2 = findClassRow(op.proposalId);
+                    if (row2) {
+                        applyClassProposalRemaining(
+                            op.proposalId,
+                            computeClassRemaining(row2, op.rejectFields)
+                        );
+                    }
+                }
+            }
+            if (op.op === 'approve' && op.bankSnap) {
+                if (op.kind === 'parts') {
+                    scheduleLocalBankApply(applyApprovedPartsLocally(op.bankSnap));
+                } else if (op.kind === 'class') {
+                    scheduleLocalBankApply(applyApprovedClassificationLocally(op.bankSnap));
+                }
+            }
+        }
+        updatePendingChrome();
+    }
+
+    async function lookupLocalQuestion(questionId) {
+        if (!global.storage || typeof global.storage.getAllQuestions !== 'function') return null;
+        try {
+            var all = await global.storage.getAllQuestions();
+            var qid = String(questionId || '');
+            for (var i = 0; i < (all || []).length; i++) {
+                if (all[i] && String(all[i].id) === qid) return all[i];
+            }
+        } catch (ignore) {}
+        return null;
+    }
+
+    function bankHasFilledPartsLocal(q) {
+        if (!q) return false;
+        if (String(q.partsStatus || '').trim().toLowerCase() === 'filled') return true;
+        return Array.isArray(q.questionParts) && q.questionParts.length > 0;
+    }
+
+    function classNeedsOverwriteLocal(q, fields, currentValues) {
+        if (q && String(q.reviewedByAI || '').trim().toUpperCase() === 'Y') return true;
+        var src = currentValues || {};
+        for (var i = 0; i < (fields || []).length; i++) {
+            var f = fields[i];
+            var meta = classFieldMeta(f);
+            if (meta && meta.blankOnly) continue;
+            if (!classValueIsEmpty(f, src[f])) return true;
+            if (q && !classValueIsEmpty(f, q[f])) return true;
+        }
+        return false;
+    }
+
+    function executePendingOp(op) {
+        if (op.kind === 'parts' && op.op === 'approve') {
+            return proxyAction({
+                action: 'approveQuestionPartsProposal',
+                proposalId: String(op.proposalId || ''),
+                questionId: String(op.questionId || ''),
+                confirmOverwrite: op.confirmOverwrite === true
+            }, 120000);
+        }
+        if (op.kind === 'parts' && op.op === 'reject') {
+            return proxyAction({
+                action: 'rejectQuestionPartsProposal',
+                proposalId: String(op.proposalId || ''),
+                questionId: String(op.questionId || '')
+            }, 60000);
+        }
+        if (op.kind === 'class' && op.op === 'approve') {
+            return proxyAction({
+                action: 'approveClassificationProposal',
+                proposalId: String(op.proposalId || ''),
+                questionId: String(op.questionId || ''),
+                approveFields: Array.isArray(op.approveFields) ? op.approveFields : [],
+                values: op.values || {},
+                confirmOverwrite: op.confirmOverwrite === true
+            }, 120000);
+        }
+        if (op.kind === 'class' && op.op === 'reject') {
+            var payload = {
+                action: 'rejectClassificationProposal',
+                proposalId: String(op.proposalId || ''),
+                questionId: String(op.questionId || '')
+            };
+            if (Array.isArray(op.rejectFields) && op.rejectFields.length) {
+                payload.rejectFields = op.rejectFields;
+            }
+            return proxyAction(payload, 60000);
+        }
+        return Promise.resolve({ ok: false, error: 'bad_request' });
+    }
+
+    async function flushPendingOps() {
+        if (hubState.flushing) return false;
+        var ops = (hubState.pendingOps || []).slice();
+        if (!ops.length) return true;
+        hubState.flushing = true;
+        hubState.busy = true;
+        syncBulkButton();
+        var total = ops.length;
+        var done = 0;
+        var failedMsg = '';
+        setHubBanner('正在同步至雲端（0／' + total + '）…', 'info');
+        try {
+            for (var i = 0; i < ops.length; i++) {
+                var op = ops[i];
+                setHubBanner('正在同步至雲端（' + done + '／' + total + '）…', 'info');
+                var data = null;
+                try {
+                    data = await enqueueStagingWrite(function () {
+                        return executePendingOp(op);
+                    });
+                } catch (err) {
+                    failedMsg = errorMessage(err && err.code);
+                    break;
+                }
+                if (data && data.needsConfirm === true && op.confirmOverwrite !== true) {
+                    var confirmOk = global.confirm
+                        ? global.confirm(
+                            '同步時發現題目「' + String(op.questionId || '')
+                            + '」需要確認覆寫。確定覆寫並繼續同步其餘項目？'
+                        )
+                        : false;
+                    if (!confirmOk) {
+                        failedMsg = '已取消覆寫；未完成項目仍保留本機。';
+                        break;
+                    }
+                    op.confirmOverwrite = true;
+                    persistPendingOps();
+                    try {
+                        data = await enqueueStagingWrite(function () {
+                            return executePendingOp(op);
+                        });
+                    } catch (err2) {
+                        failedMsg = errorMessage(err2 && err2.code);
+                        break;
+                    }
+                }
+                if (data && data.error === 'blank_only_filled') {
+                    if (Object.prototype.hasOwnProperty.call(data, 'proposalRemaining')) {
+                        op.proposalRemaining = data.proposalRemaining;
+                    }
+                    removePendingOp(op.localId);
+                    done += 1;
+                    continue;
+                }
+                if (!data || data.ok !== true) {
+                    failedMsg = (data && data.message && String(data.message))
+                        || errorMessage(data && data.error);
+                    break;
+                }
+                if (data.question) {
+                    if (op.kind === 'parts') {
+                        scheduleLocalBankApply(applyApprovedPartsLocally(data.question));
+                    } else if (op.kind === 'class') {
+                        scheduleLocalBankApply(applyApprovedClassificationLocally(data.question));
+                    }
+                }
+                removePendingOp(op.localId);
+                done += 1;
+                setHubBanner('正在同步至雲端（' + done + '／' + total + '）…', 'info');
+            }
+            if (failedMsg) {
+                setHubBanner(
+                    '同步失敗（已完成 ' + done + '／' + total + '）：' + failedMsg
+                    + '。未完成項目仍保留本機，可稍後再關閉以重試。',
+                    'error'
+                );
+                return false;
+            }
+            setHubBanner(done ? ('已成功同步 ' + done + ' 項至雲端。') : '沒有待同步項目。', 'ok');
+            return true;
+        } finally {
+            hubState.flushing = false;
+            hubState.busy = false;
+            syncBulkButton();
+            syncHubChrome();
+        }
+    }
+
+    function hideFeedbackHubUi() {
+        if (!hubOverlay) return;
+        hubOverlay.hidden = true;
+        hubState.selected = {};
+        hubState.busy = false;
+        hubState.inFlight = Object.create(null);
+        if (global.AiExplanation && typeof AiExplanation.closeAdminPanel === 'function') {
+            AiExplanation.closeAdminPanel();
+        }
     }
 
     function esc(text) {
@@ -556,21 +952,30 @@
         syncBulkButton();
     }
 
-    function closeFeedbackHub() {
-        if (!hubOverlay) return;
-        hubOverlay.hidden = true;
-        hubState.selected = {};
-        hubState.busy = false;
-        hubState.inFlight = Object.create(null);
-        if (global.AiExplanation && typeof AiExplanation.closeAdminPanel === 'function') {
-            AiExplanation.closeAdminPanel();
+    async function closeFeedbackHub() {
+        if (!hubOverlay || hubOverlay.hidden) return;
+        if (hubState.flushing) return;
+        if (hasUnsyncedPending()) {
+            var flushed = await flushPendingOps();
+            if (!flushed) {
+                var leave = global.confirm
+                    ? global.confirm(
+                        '尚有 ' + pendingCount() + ' 項審批未同步至雲端。'
+                        + '關閉後會保留在本機（重新整理亦然），下次關閉視窗可再試。仍要關閉？'
+                    )
+                    : false;
+                if (!leave) return;
+            }
         }
+        hideFeedbackHubUi();
     }
 
     async function openFeedbackHub() {
         if (!hasAdminAccess()) return;
         ensureHubOverlay();
         bindEscape();
+        syncBeforeUnloadGuard();
+        await loadPendingOpsFromDisk();
         hubOverlay.hidden = false;
         var filter = document.getElementById('feedback-hub-status-filter');
         if (filter) filter.value = hubState.statusFilter || 'open';
@@ -700,8 +1105,10 @@
             hubState.error = errorMessage(err && err.code);
         } finally {
             hubState.loading = false;
+            applyPendingOpsToLoadedRows();
             syncHubChrome();
             renderHubList();
+            updatePendingChrome();
         }
     }
 
@@ -764,7 +1171,7 @@
         var btn = document.getElementById('feedback-hub-bulk-resolve');
         if (!btn) return;
         var n = Object.keys(hubState.selected).length;
-        var locked = hubState.busy || anyStagingInFlight();
+        var locked = hubState.busy || hubState.flushing || anyStagingInFlight();
         if (hubState.tab === 'parts' || hubState.tab === 'classification') {
             var total = hubState.tab === 'parts'
                 ? (hubState.partsRows || []).length
@@ -796,7 +1203,9 @@
             syncBulkButton();
             return;
         }
-        setHubBanner('', '');
+        if (!hasUnsyncedPending() || hubState.flushing) {
+            setHubBanner('', '');
+        }
         var rows = filteredRows();
         if (!rows.length) {
             var emptyMsg = '尚未有符合條件的項目。';
@@ -1077,110 +1486,103 @@
     }
 
     async function approvePartsProposal(proposalId) {
-        if (!hasAdminAccess()) return;
+        if (!hasAdminAccess() || hubState.flushing) return;
         var row = findPartsRow(proposalId);
         if (!row) return;
         var actionId = String(row.id || '');
-        if (!tryBeginStagingAction('parts', actionId)) return;
+        if (!actionId) return;
+        // Same proposal already queued for remove → ignore.
+        var already = (hubState.pendingOps || []).some(function (op) {
+            return op && op.kind === 'parts' && String(op.proposalId) === actionId;
+        });
+        if (already) {
+            setHubBanner('此提案已在本機待同步佇列。', 'warn');
+            return;
+        }
+
+        var confirmOverwrite = false;
+        var live = await lookupLocalQuestion(row.questionId);
+        if (bankHasFilledPartsLocal(live)) {
+            var currentPreview = formatPartsPreview(live && live.questionParts);
+            var proposedPreview = formatPartsPreview(row.questionParts);
+            var ok = global.confirm
+                ? global.confirm(
+                    '題目「' + String(row.questionId || '') + '」已有分題。確定覆寫？\n\n'
+                    + '現有：' + currentPreview + '\n'
+                    + '提案：' + proposedPreview
+                    + '\n\n（會先記在本機，關閉審批視窗時才同步雲端）'
+                )
+                : false;
+            if (!ok) {
+                setHubBanner('已取消覆寫。', 'warn');
+                return;
+            }
+            confirmOverwrite = true;
+        }
+
+        var bankSnap = {
+            questionId: String(row.questionId || ''),
+            questionParts: Array.isArray(row.questionParts) ? row.questionParts.slice() : []
+        };
+        enqueuePendingOp({
+            kind: 'parts',
+            op: 'approve',
+            proposalId: actionId,
+            questionId: String(row.questionId || ''),
+            confirmOverwrite: confirmOverwrite,
+            bankSnap: bankSnap
+        });
+        hubState.partsRows = (hubState.partsRows || []).filter(function (item) {
+            return !(item && String(item.id) === actionId);
+        });
+        delete hubState.selected[actionId];
+        scheduleLocalBankApply(applyApprovedPartsLocally(bankSnap));
+        setHubBanner(
+            '已通過（本機）：' + String(row.questionId || '') + ' — 關閉視窗時同步雲端',
+            'ok'
+        );
         syncBulkButton();
         renderHubList();
-        setHubBanner('通過中…', 'info');
-        var localBankSnap = null;
-        try {
-            var data = await enqueueStagingWrite(function () {
-                return proxyAction({
-                    action: 'approveQuestionPartsProposal',
-                    proposalId: String(row.id || ''),
-                    questionId: String(row.questionId || ''),
-                    confirmOverwrite: false
-                }, 120000);
-            });
-            if (!data) {
-                setHubBanner(errorMessage('github_error'), 'error');
-                return;
-            }
-            if (data.needsConfirm === true) {
-                var currentPreview = formatPartsPreview(data.current && data.current.questionParts);
-                var proposedPreview = formatPartsPreview(data.proposed && data.proposed.questionParts);
-                var ok = global.confirm
-                    ? global.confirm(
-                        '題目「' + String(row.questionId || '') + '」已有分題。確定覆寫？\n\n'
-                        + '現有：' + currentPreview + '\n'
-                        + '提案：' + proposedPreview
-                    )
-                    : false;
-                if (!ok) {
-                    setHubBanner('已取消覆寫。', 'warn');
-                    return;
-                }
-                setHubBanner('覆寫並通過中…', 'info');
-                data = await enqueueStagingWrite(function () {
-                    return proxyAction({
-                        action: 'approveQuestionPartsProposal',
-                        proposalId: String(row.id || ''),
-                        questionId: String(row.questionId || ''),
-                        confirmOverwrite: true
-                    }, 120000);
-                });
-            }
-            if (!data || data.ok !== true) {
-                setHubBanner(
-                    (data && data.message && String(data.message)) || errorMessage(data && data.error),
-                    'error'
-                );
-                return;
-            }
-            hubState.partsRows = (hubState.partsRows || []).filter(function (item) {
-                return !(item && String(item.id) === String(row.id));
-            });
-            setHubBanner('已通過並寫入題庫：' + String(row.questionId || ''), 'ok');
-            localBankSnap = data.question;
-        } catch (err) {
-            setHubBanner(errorMessage(err && err.code), 'error');
-        } finally {
-            endStagingAction('parts', actionId);
-            syncBulkButton();
-            renderHubList();
-        }
-        if (localBankSnap) scheduleLocalBankApply(applyApprovedPartsLocally(localBankSnap));
+        updatePendingChrome();
     }
 
     async function rejectPartsProposal(proposalId) {
-        if (!hasAdminAccess()) return;
+        if (!hasAdminAccess() || hubState.flushing) return;
         var row = findPartsRow(proposalId);
         if (!row) return;
         var ok = global.confirm
-            ? global.confirm('拒絕題目「' + String(row.questionId || '') + '」的分題提案？提案會從暫存移除，不會改題庫。')
+            ? global.confirm(
+                '拒絕題目「' + String(row.questionId || '') + '」的分題提案？'
+                + '提案會在關閉視窗同步後從暫存移除，不會改題庫。'
+            )
             : true;
         if (!ok) return;
         var actionId = String(row.id || '');
-        if (!tryBeginStagingAction('parts', actionId)) return;
+        if (!actionId) return;
+        var already = (hubState.pendingOps || []).some(function (op) {
+            return op && op.kind === 'parts' && String(op.proposalId) === actionId;
+        });
+        if (already) {
+            setHubBanner('此提案已在本機待同步佇列。', 'warn');
+            return;
+        }
+        enqueuePendingOp({
+            kind: 'parts',
+            op: 'reject',
+            proposalId: actionId,
+            questionId: String(row.questionId || '')
+        });
+        hubState.partsRows = (hubState.partsRows || []).filter(function (item) {
+            return !(item && String(item.id) === actionId);
+        });
+        delete hubState.selected[actionId];
+        setHubBanner(
+            '已拒絕（本機）：' + String(row.questionId || '') + ' — 關閉視窗時同步雲端',
+            'ok'
+        );
         syncBulkButton();
         renderHubList();
-        setHubBanner('拒絕中…', 'info');
-        try {
-            var data = await enqueueStagingWrite(function () {
-                return proxyAction({
-                    action: 'rejectQuestionPartsProposal',
-                    proposalId: String(row.id || ''),
-                    questionId: String(row.questionId || '')
-                }, 60000);
-            });
-            if (!data || data.ok !== true) {
-                setHubBanner(errorMessage(data && data.error), 'error');
-                return;
-            }
-            hubState.partsRows = (hubState.partsRows || []).filter(function (item) {
-                return !(item && String(item.id) === String(row.id));
-            });
-            setHubBanner('已拒絕並移除提案：' + String(row.questionId || ''), 'ok');
-        } catch (err) {
-            setHubBanner(errorMessage(err && err.code), 'error');
-        } finally {
-            endStagingAction('parts', actionId);
-            syncBulkButton();
-            renderHubList();
-        }
+        updatePendingChrome();
     }
 
     async function deleteAiExplanationFromHub(questionId, explanationId) {
@@ -1395,7 +1797,7 @@
     }
 
     async function approveClassificationProposal(proposalId, options) {
-        if (!hasAdminAccess()) return;
+        if (!hasAdminAccess() || hubState.flushing) return;
         var row = findClassRow(proposalId);
         if (!row) return;
         options = options || {};
@@ -1405,7 +1807,6 @@
                 return isAllowedClassField(f);
             })
             : (Array.isArray(row.fields) ? row.fields.slice() : []);
-        // Client-side blank-only gate (server also enforces against live bank).
         var skippedBlank = [];
         approveFields = approveFields.filter(function (field) {
             var meta = classFieldMeta(field);
@@ -1464,88 +1865,74 @@
             }
         }
 
-        var actionId = String(row.id || '');
-        if (!tryBeginStagingAction('class', actionId)) return;
-        syncBulkButton();
-        renderHubList();
-        setHubBanner('通過中…', 'info');
-        var localBankSnap = null;
-        try {
-            var payload = {
-                action: 'approveClassificationProposal',
-                proposalId: String(row.id || ''),
-                questionId: String(row.questionId || ''),
-                approveFields: approveFields,
-                values: values,
-                confirmOverwrite: false
-            };
-            var data = await enqueueStagingWrite(function () {
-                return proxyAction(payload, 120000);
-            });
-            if (!data) {
-                setHubBanner(errorMessage('github_error'), 'error');
+        var live = await lookupLocalQuestion(row.questionId);
+        var confirmOverwrite = false;
+        if (classNeedsOverwriteLocal(live, approveFields, row.currentValues || {})) {
+            var currentPreview = approveFields.map(function (field) {
+                return classFieldLabel(field) + '：'
+                    + formatClassList((row.currentValues || {})[field]);
+            }).join('\n');
+            var proposedPreview = approveFields.map(function (field) {
+                return classFieldLabel(field) + '：' + formatClassList(values[field]);
+            }).join('\n');
+            var overwriteOk = global.confirm
+                ? global.confirm(
+                    '題目「' + String(row.questionId || '') + '」已有分類或 reviewedByAI=Y。確定覆寫？\n\n'
+                    + '現有：\n' + currentPreview + '\n\n'
+                    + '將寫入：\n' + proposedPreview
+                    + '\n\n（會先記在本機，關閉審批視窗時才同步雲端）'
+                )
+                : false;
+            if (!overwriteOk) {
+                setHubBanner('已取消覆寫。', 'warn');
                 return;
             }
-            if (data.needsConfirm === true) {
-                var currentPreview = formatClassConfirmPreview(data.current);
-                var proposedPreview = formatClassConfirmPreview(data.proposed);
-                var ok = global.confirm
-                    ? global.confirm(
-                        '題目「' + String(row.questionId || '') + '」已有分類或 reviewedByAI=Y。確定覆寫？\n\n'
-                        + '現有：\n' + currentPreview + '\n\n'
-                        + '將寫入：\n' + proposedPreview
-                    )
-                    : false;
-                if (!ok) {
-                    setHubBanner('已取消覆寫。', 'warn');
-                    return;
-                }
-                setHubBanner('覆寫並通過中…', 'info');
-                payload.confirmOverwrite = true;
-                data = await enqueueStagingWrite(function () {
-                    return proxyAction(payload, 120000);
-                });
-            }
-            if (data && data.error === 'blank_only_filled') {
-                applyClassProposalRemaining(row.id, data.proposalRemaining);
-                setHubBanner(
-                    (data.message && String(data.message))
-                        || '空白才可寫入的欄位在題庫已有值，已略過。',
-                    'warn'
-                );
-                syncHubChrome();
-                renderHubList();
-                return;
-            }
-            if (!data || data.ok !== true) {
-                setHubBanner(
-                    (data && data.message && String(data.message)) || errorMessage(data && data.error),
-                    'error'
-                );
-                return;
-            }
-            applyClassProposalRemaining(row.id, data.proposalRemaining);
-            var fieldNote = (data.approvedFields && data.approvedFields.length)
-                ? '（' + data.approvedFields.join('、') + '）'
-                : '';
-            var blockedNote = (data.blockedFields && data.blockedFields.length)
-                ? '；略過空白才寫：' + data.blockedFields.map(classFieldLabel).join('、')
-                : '';
-            setHubBanner('已通過並寫入題庫：' + String(row.questionId || '') + fieldNote + blockedNote, 'ok');
-            localBankSnap = data.question;
-        } catch (err) {
-            setHubBanner(errorMessage(err && err.code), 'error');
-        } finally {
-            endStagingAction('class', actionId);
-            syncBulkButton();
-            syncHubChrome();
-            renderHubList();
+            confirmOverwrite = true;
         }
-        if (localBankSnap) scheduleLocalBankApply(applyApprovedClassificationLocally(localBankSnap));
+
+        var actionId = String(row.id || '');
+        var remaining = computeClassRemaining(row, approveFields);
+        // Also update proposedValues on remaining for edited-but-not-approved fields
+        if (remaining) {
+            Object.keys(edits).forEach(function (field) {
+                if (remaining.fields.indexOf(field) >= 0) {
+                    remaining.proposedValues[field] = edits[field];
+                }
+            });
+        }
+        var bankSnap = {
+            questionId: String(row.questionId || ''),
+            fields: approveFields.slice(),
+            values: values
+        };
+        enqueuePendingOp({
+            kind: 'class',
+            op: 'approve',
+            proposalId: actionId,
+            questionId: String(row.questionId || ''),
+            approveFields: approveFields.slice(),
+            values: values,
+            confirmOverwrite: confirmOverwrite,
+            proposalRemaining: remaining,
+            bankSnap: bankSnap
+        });
+        applyClassProposalRemaining(actionId, remaining);
+        scheduleLocalBankApply(applyApprovedClassificationLocally(bankSnap));
+        var fieldNote = approveFields.length
+            ? '（' + approveFields.map(classFieldLabel).join('、') + '）'
+            : '';
+        setHubBanner(
+            '已通過（本機）：' + String(row.questionId || '') + fieldNote + ' — 關閉視窗時同步雲端',
+            'ok'
+        );
+        syncBulkButton();
+        syncHubChrome();
+        renderHubList();
+        updatePendingChrome();
     }
 
     async function rejectClassificationProposal(proposalId, options) {
-        if (!hasAdminAccess()) return;
+        if (!hasAdminAccess() || hubState.flushing) return;
         var row = findClassRow(proposalId);
         if (!row) return;
         options = options || {};
@@ -1562,53 +1949,41 @@
             ? global.confirm(
                 partial
                     ? '保留題目「' + String(row.questionId || '') + '」的「' + label
-                        + '」原值？該欄會從提案移除，不會改題庫。'
+                        + '」原值？該欄會從提案移除（關閉視窗時同步），不會改題庫。'
                     : '全部保留原值並移除題目「' + String(row.questionId || '')
-                        + '」的分類提案？不會改題庫。'
+                        + '」的分類提案？（關閉視窗時同步）不會改題庫。'
             )
             : true;
         if (!ok) return;
         var actionId = String(row.id || '');
-        if (!tryBeginStagingAction('class', actionId)) return;
+        var remaining = partial ? computeClassRemaining(row, rejectFields) : null;
+        enqueuePendingOp({
+            kind: 'class',
+            op: 'reject',
+            proposalId: actionId,
+            questionId: String(row.questionId || ''),
+            rejectFields: partial ? rejectFields.slice() : [],
+            proposalRemaining: remaining
+        });
+        applyClassProposalRemaining(actionId, remaining);
+        setHubBanner(
+            partial
+                ? '已保留原值（本機）：' + String(row.questionId || '') + '（' + label + '）— 關閉視窗時同步雲端'
+                : '已全部保留原值（本機）：' + String(row.questionId || '') + ' — 關閉視窗時同步雲端',
+            'ok'
+        );
         syncBulkButton();
+        syncHubChrome();
         renderHubList();
-        setHubBanner(partial ? '保留原值中…' : '拒絕中…', 'info');
-        try {
-            var payload = {
-                action: 'rejectClassificationProposal',
-                proposalId: String(row.id || ''),
-                questionId: String(row.questionId || '')
-            };
-            if (partial) payload.rejectFields = rejectFields;
-            var data = await enqueueStagingWrite(function () {
-                return proxyAction(payload, 60000);
-            });
-            if (!data || data.ok !== true) {
-                setHubBanner(
-                    (data && data.message && String(data.message)) || errorMessage(data && data.error),
-                    'error'
-                );
-                return;
-            }
-            applyClassProposalRemaining(row.id, data.proposalRemaining);
-            setHubBanner(
-                partial
-                    ? '已保留原值並移出提案欄位：' + String(row.questionId || '') + '（' + label + '）'
-                    : '已全部保留原值並移除提案：' + String(row.questionId || ''),
-                'ok'
-            );
-        } catch (err) {
-            setHubBanner(errorMessage(err && err.code), 'error');
-        } finally {
-            endStagingAction('class', actionId);
-            syncBulkButton();
-            syncHubChrome();
-            renderHubList();
-        }
+        updatePendingChrome();
     }
 
     async function bulkApproveClassification() {
-        if (hubState.busy || anyStagingInFlight() || !hasAdminAccess()) return;
+        if (hubState.busy || hubState.flushing || anyStagingInFlight() || !hasAdminAccess()) return;
+        if (hasUnsyncedPending()) {
+            setHubBanner('請先關閉視窗同步本機待審批（' + pendingCount() + ' 項），再使用批量通過。', 'warn');
+            return;
+        }
         var selected = Object.keys(hubState.selected).filter(Boolean);
         var ids = selected.length
             ? selected
@@ -1727,7 +2102,11 @@
     }
 
     async function bulkApproveParts() {
-        if (hubState.busy || anyStagingInFlight() || !hasAdminAccess()) return;
+        if (hubState.busy || hubState.flushing || anyStagingInFlight() || !hasAdminAccess()) return;
+        if (hasUnsyncedPending()) {
+            setHubBanner('請先關閉視窗同步本機待審批（' + pendingCount() + ' 項），再使用批量通過。', 'warn');
+            return;
+        }
         var selected = Object.keys(hubState.selected).filter(Boolean);
         var ids = selected.length
             ? selected
@@ -1846,6 +2225,8 @@
 
     function initReportIssueFeature() {
         bindEscape();
+        syncBeforeUnloadGuard();
+        loadPendingOpsFromDisk().catch(function () {});
         refreshHubButton();
     }
 

@@ -36,7 +36,7 @@
 
 | 路徑 | 範圍 |
 | --- | --- |
-| [`js/report-issue.kb.md`](js/report-issue.kb.md) | 回饋／回報 hub：分類／分題審批、approve unlock（PR #78） |
+| [`js/report-issue.kb.md`](js/report-issue.kb.md) | 回饋／回報 hub：分類／分題審批、local-first queue＋關窗 flush（.29）、approve unlock（PR #78） |
 | [`js/filters.kb.md`](js/filters.kb.md) | 題目篩選；特徵 vs admin「空白／缺漏」；考生表現 |
 | [`js/github-sync.kb.md`](js/github-sync.kb.md) | 題庫 load／save、shards、dirty upload、schemaVersion |
 | [`js/ai-explanation.kb.md`](js/ai-explanation.kb.md) | AI解釋 side-file；`accessRights.ai`；Poe proxy |
@@ -73,7 +73,7 @@
 | 特徵「有分題」 | 特徵內 **只有**「有分題」；「沒有分題」不在 `FEATURE_ITEMS`（狀態用 `partsStatus`／admin 空白） |
 | 空白／缺漏 | admin-only `ADMIN_BLANK_FEATURE_ITEMS`，**不** 併入特徵 |
 | UI「考生表現」 | 原「分題表現」改名；storage keys 不變（`partPerformance`） |
-| Approve unlock | staging 寫入成功即解鎖；IDB apply 背景化（勿用 `hubState.busy` 擋住整段 refresh） |
+| Approve unlock | 點擊入本機 pendingOps（IDB）；關 hub 串列 flush；staging 成功前他機可見 stale；IDB bank 樂觀套用；勿用整 hub busy 擋 refresh |
 | HKEAA vs 雅集 | 可分屬不同 shard 檔 |
 | PR 流程 | OutliersEcon 推 branch；mas-repo merge |
 
