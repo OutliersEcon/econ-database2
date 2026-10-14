@@ -85,7 +85,11 @@
         pendingOps: [],
         flushing: false,
         loading: false,
-        error: ''
+        error: '',
+        // Lightweight staging lists for 題目 tab ✓/✕ (shared with hub when loaded).
+        stagingCacheReady: false,
+        stagingCacheLoading: false,
+        stagingCacheError: ''
     };
 
     function stagingActionKey(kind, proposalId) {
@@ -132,6 +136,8 @@
     var PENDING_STORE = 'ops';
     var beforeUnloadBound = false;
     var pendingPersistChain = Promise.resolve();
+    // Outside-hub staging actions honour github-sync readAutoSync(); hub stays local-first.
+    var lastFlushError = '';
 
     function pendingCount() {
         return (hubState.pendingOps || []).length;
@@ -238,7 +244,9 @@
         if (!Array.isArray(hubState.pendingOps)) hubState.pendingOps = [];
         hubState.pendingOps.push(entry);
         persistPendingOps();
+        lastFlushError = '';
         updatePendingChrome();
+        updatePendingFlushChip();
         return entry;
     }
 
@@ -248,6 +256,10 @@
         });
         persistPendingOps();
         updatePendingChrome();
+        updatePendingFlushChip();
+        if (!hasUnsyncedPending()) {
+            lastFlushError = '';
+        }
     }
 
     function syncBeforeUnloadGuard() {
@@ -260,7 +272,134 @@
         });
     }
 
+    function isHubModalOpen() {
+        return !!(hubOverlay && !hubOverlay.hidden);
+    }
+
+    /** Same source of truth as github-sync.js「自動同步」checkbox. */
+    function isGitAutoSyncOn() {
+        if (typeof readAutoSync === 'function') {
+            try { return !!readAutoSync(); } catch (ignore) { return false; }
+        }
+        try {
+            return global.localStorage.getItem('econ_git_auto_sync') === '1';
+        } catch (ignore2) {
+            return false;
+        }
+    }
+
+    function ensurePendingFlushChip() {
+        var hubBtn = ensureHubButton();
+        var host = hubBtn && hubBtn.parentNode;
+        if (!host) {
+            host = document.querySelector('header div[style*="flex-wrap"]')
+                || document.querySelector('header');
+        }
+        if (!host) return null;
+        var chip = document.getElementById('staging-pending-chip');
+        if (chip) {
+            if (chip.dataset.bound !== '1') {
+                chip.dataset.bound = '1';
+                var btn = chip.querySelector('#staging-pending-flush-btn');
+                if (btn) {
+                    btn.addEventListener('click', function () {
+                        flushPendingOps({ reason: 'manual' }).catch(function () {});
+                    });
+                }
+            }
+            return chip;
+        }
+        chip = document.createElement('div');
+        chip.id = 'staging-pending-chip';
+        chip.className = 'staging-pending-chip';
+        chip.hidden = true;
+        chip.setAttribute('role', 'status');
+        chip.innerHTML = ''
+            + '<span class="staging-pending-chip-label" id="staging-pending-chip-label">待上傳審批 0</span>'
+            + '<button type="button" class="btn btn-primary btn-sm" id="staging-pending-flush-btn">立即上傳</button>';
+        chip.dataset.bound = '1';
+        var flushBtn = chip.querySelector('#staging-pending-flush-btn');
+        flushBtn.addEventListener('click', function () {
+            flushPendingOps({ reason: 'manual' }).catch(function () {});
+        });
+        if (hubBtn && hubBtn.parentNode === host) {
+            host.insertBefore(chip, hubBtn.nextSibling);
+        } else {
+            host.appendChild(chip);
+        }
+        return chip;
+    }
+
+    function updatePendingFlushChip() {
+        if (!hasAdminAccess()) {
+            var dead = document.getElementById('staging-pending-chip');
+            if (dead) dead.hidden = true;
+            return;
+        }
+        var chip = ensurePendingFlushChip();
+        if (!chip) return;
+        var n = pendingCount();
+        var label = document.getElementById('staging-pending-chip-label');
+        var btn = document.getElementById('staging-pending-flush-btn');
+        if (n <= 0 && !hubState.flushing) {
+            chip.hidden = true;
+            chip.classList.remove('is-error', 'is-flushing');
+            if (label) label.textContent = '待上傳審批 0';
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '立即上傳';
+            }
+            return;
+        }
+        chip.hidden = false;
+        if (hubState.flushing) {
+            chip.classList.add('is-flushing');
+            chip.classList.remove('is-error');
+            if (label) label.textContent = '正在上傳審批…';
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '上傳中';
+            }
+            return;
+        }
+        chip.classList.remove('is-flushing');
+        if (lastFlushError) {
+            chip.classList.add('is-error');
+            if (label) {
+                label.textContent = '待上傳審批 ' + n + '（失敗可重試）';
+                label.title = lastFlushError;
+            }
+        } else {
+            chip.classList.remove('is-error');
+            if (label) {
+                label.textContent = '待上傳審批 ' + n;
+                label.title = isGitAutoSyncOn()
+                    ? '有本機待同步審批（可立即上傳）'
+                    : '自動同步已關閉：按「立即上傳」或開啟自動同步後再操作';
+            }
+        }
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '立即上傳';
+        }
+    }
+
+    function notifyFlushStatus(text, kind, reason) {
+        setHubBanner(text, kind);
+        updatePendingFlushChip();
+        if (reason === 'hub') return;
+        if (kind === 'error' || kind === 'ok') {
+            showCardStagingToast(text);
+            return;
+        }
+        if ((reason === 'manual' || reason === 'auto-sync')
+            && kind === 'info' && String(text || '').indexOf('（0／') !== -1) {
+            showCardStagingToast(text);
+        }
+    }
+
     function updatePendingChrome() {
+        updatePendingFlushChip();
         if (!hubOverlay || hubOverlay.hidden) return;
         if (hubState.flushing || hubState.busy) return;
         var n = pendingCount();
@@ -348,6 +487,7 @@
             }
         }
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function lookupLocalQuestion(questionId) {
@@ -421,21 +561,28 @@
         return Promise.resolve({ ok: false, error: 'bad_request' });
     }
 
-    async function flushPendingOps() {
+    async function flushPendingOps(options) {
+        options = options || {};
+        var reason = options.reason || 'hub';
         if (hubState.flushing) return false;
         var ops = (hubState.pendingOps || []).slice();
-        if (!ops.length) return true;
+        if (!ops.length) {
+            lastFlushError = '';
+            updatePendingFlushChip();
+            return true;
+        }
         hubState.flushing = true;
         hubState.busy = true;
         syncBulkButton();
+        updatePendingFlushChip();
         var total = ops.length;
         var done = 0;
         var failedMsg = '';
-        setHubBanner('正在同步至雲端（0／' + total + '）…', 'info');
+        notifyFlushStatus('正在同步至雲端（0／' + total + '）…', 'info', reason);
         try {
             for (var i = 0; i < ops.length; i++) {
                 var op = ops[i];
-                setHubBanner('正在同步至雲端（' + done + '／' + total + '）…', 'info');
+                notifyFlushStatus('正在同步至雲端（' + done + '／' + total + '）…', 'info', reason);
                 var data = null;
                 try {
                     data = await enqueueStagingWrite(function () {
@@ -489,23 +636,35 @@
                 }
                 removePendingOp(op.localId);
                 done += 1;
-                setHubBanner('正在同步至雲端（' + done + '／' + total + '）…', 'info');
+                notifyFlushStatus('正在同步至雲端（' + done + '／' + total + '）…', 'info', reason);
             }
             if (failedMsg) {
-                setHubBanner(
+                lastFlushError = failedMsg;
+                notifyFlushStatus(
                     '同步失敗（已完成 ' + done + '／' + total + '）：' + failedMsg
-                    + '。未完成項目仍保留本機，可稍後再關閉以重試。',
-                    'error'
+                    + '。未完成項目仍保留本機，可按「立即上傳」重試。',
+                    'error',
+                    reason
                 );
                 return false;
             }
-            setHubBanner(done ? ('已成功同步 ' + done + ' 項至雲端。') : '沒有待同步項目。', 'ok');
+            lastFlushError = '';
+            notifyFlushStatus(
+                done ? ('已成功同步 ' + done + ' 項至雲端。') : '沒有待同步項目。',
+                'ok',
+                reason
+            );
             return true;
         } finally {
             hubState.flushing = false;
             hubState.busy = false;
             syncBulkButton();
             syncHubChrome();
+            updatePendingFlushChip();
+            if (hasUnsyncedPending()) {
+                // Keep chip visible; do not auto-retry immediately after failure.
+                // User can press 立即上傳, or a later enqueue will reschedule.
+            }
         }
     }
 
@@ -536,6 +695,230 @@
         if (!global.authManager || !global.authManager.currentUser) return '';
         return String(global.authManager.currentUser).trim().toLowerCase();
     }
+
+
+    // --- 題目 tab in-card staging approve/reject (admin) ---
+
+    function findPartsRowByQuestionId(questionId) {
+        var qid = String(questionId || '');
+        if (!qid) return null;
+        var rows = hubState.partsRows || [];
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i] && String(rows[i].questionId || '') === qid) return rows[i];
+        }
+        return null;
+    }
+
+    function findClassRowByQuestionId(questionId) {
+        var qid = String(questionId || '');
+        if (!qid) return null;
+        var rows = hubState.classRows || [];
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i] && String(rows[i].questionId || '') === qid) return rows[i];
+        }
+        return null;
+    }
+
+    function pendingForQuestion(questionId) {
+        if (!hasAdminAccess()) return { classRow: null, partsRow: null };
+        return {
+            classRow: findClassRowByQuestionId(questionId),
+            partsRow: findPartsRowByQuestionId(questionId)
+        };
+    }
+
+    function stagingActionsHtml(questionId) {
+        if (!hasAdminAccess()) return '';
+        if (!hubState.stagingCacheReady && !hubState.partsRows.length && !hubState.classRows.length) {
+            return '';
+        }
+        var pending = pendingForQuestion(questionId);
+        var bits = [];
+        if (pending.classRow && pending.classRow.id) {
+            bits.push(
+                '<div class="question-staging-row" data-staging-kind="class">'
+                + '<span class="question-staging-label">待審批分類</span>'
+                + '<button type="button" class="question-staging-btn is-approve" data-action="staging-approve"'
+                + ' data-kind="class" data-proposal-id="' + esc(pending.classRow.id) + '"'
+                + ' data-id="' + esc(questionId) + '" title="通過全部欄位（本機佇列）">✓</button>'
+                + '<button type="button" class="question-staging-btn is-reject" data-action="staging-reject"'
+                + ' data-kind="class" data-proposal-id="' + esc(pending.classRow.id) + '"'
+                + ' data-id="' + esc(questionId) + '" title="全部保留原值（本機佇列）">✕</button>'
+                + '</div>'
+            );
+        }
+        if (pending.partsRow && pending.partsRow.id) {
+            bits.push(
+                '<div class="question-staging-row" data-staging-kind="parts">'
+                + '<span class="question-staging-label">待審批分題</span>'
+                + '<button type="button" class="question-staging-btn is-approve" data-action="staging-approve"'
+                + ' data-kind="parts" data-proposal-id="' + esc(pending.partsRow.id) + '"'
+                + ' data-id="' + esc(questionId) + '" title="通過分題提案（本機佇列）">✓</button>'
+                + '<button type="button" class="question-staging-btn is-reject" data-action="staging-reject"'
+                + ' data-kind="parts" data-proposal-id="' + esc(pending.partsRow.id) + '"'
+                + ' data-id="' + esc(questionId) + '" title="拒絕分題提案（本機佇列）">✕</button>'
+                + '</div>'
+            );
+        }
+        if (!bits.length) return '';
+        return '<div class="question-staging-actions" data-question-id="' + esc(questionId) + '">'
+            + bits.join('')
+            + '</div>';
+    }
+
+    function refreshQuestionCardStaging(questionId) {
+        var grid = document.getElementById('question-grid');
+        if (!grid) return;
+        var cards = grid.querySelectorAll('.question-card');
+        var onlyId = questionId != null && questionId !== '' ? String(questionId) : null;
+        for (var i = 0; i < cards.length; i++) {
+            var card = cards[i];
+            var qid = String(card.getAttribute('data-question-id') || '');
+            if (!qid) {
+                var reportBtn = card.querySelector('[data-action="report-issue"]');
+                qid = reportBtn ? String(reportBtn.getAttribute('data-id') || '') : '';
+            }
+            if (!qid) continue;
+            if (onlyId && qid !== onlyId) continue;
+            var html = stagingActionsHtml(qid);
+            var host = card.querySelector('.question-staging-actions');
+            if (!html) {
+                if (host) host.remove();
+                continue;
+            }
+            if (host) {
+                host.outerHTML = html;
+            } else {
+                var actions = card.querySelector('.question-card-actions');
+                if (actions) {
+                    actions.insertAdjacentHTML('beforebegin', html);
+                }
+            }
+        }
+    }
+
+    var cardToastTimer = null;
+    function showCardStagingToast(message) {
+        var el = document.getElementById('question-staging-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'question-staging-toast';
+            el.className = 'question-staging-toast';
+            el.setAttribute('role', 'status');
+            document.body.appendChild(el);
+        }
+        el.textContent = String(message || '');
+        el.hidden = !message;
+        el.classList.add('is-visible');
+        if (cardToastTimer) clearTimeout(cardToastTimer);
+        cardToastTimer = setTimeout(function () {
+            el.classList.remove('is-visible');
+            el.hidden = true;
+        }, 4200);
+    }
+
+    async function ensureStagingCache(force) {
+        if (!hasAdminAccess()) {
+            hubState.stagingCacheReady = false;
+            hubState.partsRows = [];
+            hubState.classRows = [];
+            refreshQuestionCardStaging();
+            return;
+        }
+        if (hubState.stagingCacheLoading) return;
+        if (hubState.stagingCacheReady && !force) {
+            refreshQuestionCardStaging();
+            return;
+        }
+        // If hub already loaded rows this session and not forcing, reuse.
+        if (!force && (hubState.partsRows.length || hubState.classRows.length)
+            && hubState.stagingCacheReady) {
+            refreshQuestionCardStaging();
+            return;
+        }
+        hubState.stagingCacheLoading = true;
+        hubState.stagingCacheError = '';
+        try {
+            await loadPendingOpsFromDisk();
+            var results = await Promise.all([
+                proxyAction({ action: 'listQuestionPartsProposals' }, 60000).catch(function (err) {
+                    return { ok: false, error: err && err.code };
+                }),
+                proxyAction({ action: 'listClassificationProposals' }, 60000).catch(function (err) {
+                    return { ok: false, error: err && err.code };
+                })
+            ]);
+            var parts = results[0];
+            var klass = results[1];
+            // Only overwrite hub lists when hub overlay is closed or empty load —
+            // when hub is open mid-edit, prefer hub's fresher loadHubData.
+            var hubOpen = hubOverlay && !hubOverlay.hidden;
+            if (!hubOpen || force) {
+                if (parts && parts.ok && Array.isArray(parts.rows)) {
+                    hubState.partsRows = parts.rows;
+                }
+                if (klass && klass.ok && Array.isArray(klass.rows)) {
+                    hubState.classRows = klass.rows;
+                    hubState.classPendingCount = (typeof klass.pendingCount === 'number')
+                        ? klass.pendingCount
+                        : hubState.classRows.length;
+                    hubState.classPauseThreshold = (typeof klass.pauseThreshold === 'number')
+                        ? klass.pauseThreshold
+                        : (hubState.classPauseThreshold || 200);
+                    hubState.classPaused = !!(klass.paused === true)
+                        || hubState.classPendingCount >= hubState.classPauseThreshold;
+                }
+                applyPendingOpsToLoadedRows();
+            }
+            hubState.stagingCacheReady = true;
+            if ((!parts || parts.ok !== true) && (!klass || klass.ok !== true)) {
+                hubState.stagingCacheError = errorMessage(
+                    (parts && parts.error) || (klass && klass.error)
+                );
+            }
+        } catch (err) {
+            hubState.stagingCacheError = errorMessage(err && err.code);
+        } finally {
+            hubState.stagingCacheLoading = false;
+            refreshQuestionCardStaging();
+        }
+    }
+
+    async function handleCardStagingAction(op, kind, proposalId, questionId) {
+        if (!hasAdminAccess() || hubState.flushing) return;
+        var k = String(kind || '');
+        var action = String(op || '');
+        var pid = String(proposalId || '');
+        if (!pid || (k !== 'class' && k !== 'parts')) return;
+        // Ensure row is in hubState (cache may be stale after hub-only edits).
+        if (k === 'parts' && !findPartsRow(pid)) {
+            await ensureStagingCache(true);
+        }
+        if (k === 'class' && !findClassRow(pid)) {
+            await ensureStagingCache(true);
+        }
+        var beforePending = pendingCount();
+        if (k === 'parts' && action === 'approve') {
+            await approvePartsProposal(pid);
+        } else if (k === 'parts' && action === 'reject') {
+            await rejectPartsProposal(pid);
+        } else if (k === 'class' && action === 'approve') {
+            await approveClassificationProposal(pid);
+        } else if (k === 'class' && action === 'reject') {
+            await rejectClassificationProposal(pid);
+        }
+        refreshQuestionCardStaging(questionId);
+        if (pendingCount() <= beforePending) return;
+        // Outside hub: honour「自動同步」. Hub path never uses this handler.
+        if (isGitAutoSyncOn()) {
+            showCardStagingToast('正在上傳審批至雲端…');
+            await flushPendingOps({ reason: 'auto-sync' });
+        } else {
+            showCardStagingToast('已加入本機佇列（自動同步已關閉）。可按「立即上傳」或稍後開啟自動同步。');
+            updatePendingFlushChip();
+        }
+    }
+
 
     function hasAdminAccess() {
         var rights = (typeof currentAccessRights === 'function')
@@ -778,7 +1161,16 @@
         if (!button) return;
         var allowed = hasAdminAccess();
         button.hidden = !allowed;
-        if (!allowed) closeFeedbackHub();
+        if (!allowed) {
+            closeFeedbackHub();
+            hubState.stagingCacheReady = false;
+            refreshQuestionCardStaging();
+            updatePendingFlushChip();
+            return;
+        }
+        ensurePendingFlushChip();
+        updatePendingFlushChip();
+        ensureStagingCache(false).catch(function () {});
     }
 
     function ensureHubOverlay() {
@@ -1105,10 +1497,12 @@
             hubState.error = errorMessage(err && err.code);
         } finally {
             hubState.loading = false;
+            hubState.stagingCacheReady = true;
             applyPendingOpsToLoadedRows();
             syncHubChrome();
             renderHubList();
             updatePendingChrome();
+            refreshQuestionCardStaging();
         }
     }
 
@@ -1544,6 +1938,7 @@
         syncBulkButton();
         renderHubList();
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function rejectPartsProposal(proposalId) {
@@ -1583,6 +1978,7 @@
         syncBulkButton();
         renderHubList();
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function deleteAiExplanationFromHub(questionId, explanationId) {
@@ -1929,6 +2325,7 @@
         syncHubChrome();
         renderHubList();
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function rejectClassificationProposal(proposalId, options) {
@@ -1976,6 +2373,7 @@
         syncHubChrome();
         renderHubList();
         updatePendingChrome();
+        refreshQuestionCardStaging();
     }
 
     async function bulkApproveClassification() {
@@ -2226,8 +2624,19 @@
     function initReportIssueFeature() {
         bindEscape();
         syncBeforeUnloadGuard();
-        loadPendingOpsFromDisk().catch(function () {});
-        refreshHubButton();
+        loadPendingOpsFromDisk().then(function () {
+            refreshHubButton();
+            updatePendingFlushChip();
+            // Leftover pending from prior session: if 自動同步 ON, flush now (no hub needed).
+            if (hasUnsyncedPending() && hasAdminAccess() && isGitAutoSyncOn()) {
+                flushPendingOps({ reason: 'auto-sync' }).catch(function () {});
+            }
+            if (hasAdminAccess()) {
+                return ensureStagingCache(false);
+            }
+        }).catch(function () {
+            refreshHubButton();
+        });
     }
 
     global.ReportIssue = {
@@ -2237,7 +2646,15 @@
         refreshHubButton: refreshHubButton,
         init: initReportIssueFeature,
         TAG_DEFS: TAG_DEFS,
-        STATUS_LABELS: STATUS_LABELS
+        STATUS_LABELS: STATUS_LABELS,
+        hasAdminAccess: hasAdminAccess,
+        pendingForQuestion: pendingForQuestion,
+        stagingActionsHtml: stagingActionsHtml,
+        refreshQuestionCardStaging: refreshQuestionCardStaging,
+        ensureStagingCache: ensureStagingCache,
+        handleCardStagingAction: handleCardStagingAction,
+        flushPendingOps: flushPendingOps,
+        updatePendingFlushChip: updatePendingFlushChip
     };
     global.openReportIssueModal = openReportModal;
     global.initReportIssueFeature = initReportIssueFeature;
