@@ -406,6 +406,22 @@
         return map[code] || ('操作失敗' + (code ? '（' + code + '）' : ''));
     }
 
+    // Append Poe/OpenRouter httpStatus + error.type when the proxy returned them.
+    function formatUpstreamFailMessage(data) {
+        var code = data && data.error;
+        var base = errorMessage(code);
+        var status = data && data.httpStatus;
+        var type = data && data.upstreamType ? String(data.upstreamType).trim() : '';
+        if ((status == null || status === '') && !type) return base;
+        var bits = [];
+        if (status != null && status !== '') bits.push(String(status));
+        if (type) bits.push(type);
+        if (code === 'upstream_error' || code === 'upstream_timeout') {
+            return '產生失敗（' + code + '｜' + bits.join('／') + '）';
+        }
+        return base + '（' + bits.join('／') + '）';
+    }
+
     function setModalStatus(text, kind) {
         modalState.status = String(text || '');
         modalState.statusKind = String(kind || '');
@@ -891,12 +907,15 @@
                 }, waitMs);
                 var stillOpen = modalState.questionId === qid && overlay && !overlay.hidden;
                 if (!data || data.ok !== true) {
-                    var failMsg = errorMessage(data && data.error);
+                    var failMsg = formatUpstreamFailMessage(data || {});
                     try {
                         console.error('[AI解釋] generate failed', {
                             questionId: qid,
                             detailLevel: detailLevel,
                             error: data && data.error,
+                            httpStatus: data && data.httpStatus,
+                            upstreamType: data && data.upstreamType,
+                            upstreamDetail: data && data.upstreamDetail,
                             data: data
                         });
                     } catch (logErr) { /* ignore */ }
@@ -946,12 +965,19 @@
                 }
                 if (typeof populateDynamicFilters === 'function') populateDynamicFilters();
             } catch (err) {
-                var errMsg = errorMessage(err && err.code);
+                var errMsg = formatUpstreamFailMessage({
+                    error: err && err.code,
+                    httpStatus: err && err.httpStatus,
+                    upstreamType: err && err.upstreamType
+                });
                 try {
                     console.error('[AI解釋] generate error', {
                         questionId: qid,
                         detailLevel: detailLevel,
                         code: err && err.code,
+                        httpStatus: err && err.httpStatus,
+                        upstreamType: err && err.upstreamType,
+                        upstreamDetail: err && err.upstreamDetail,
                         err: err
                     });
                 } catch (logErr) { /* ignore */ }

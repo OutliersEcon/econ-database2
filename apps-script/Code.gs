@@ -191,7 +191,7 @@ var POE_MODEL_MAX_ = 120;
 // Dropdown presets for Poe (keep in sync with POE_MODELS in js/poe-generate-state.js).
 // Clients may also send a sanitized free-text Poe bot id (isAllowedPoeModelId_).
 // OpenRouter accepts free-text ids (validated by isAllowedOpenRouterModel_).
-var POE_ALLOWED_MODELS_ = ['Claude-Sonnet-5.5', 'GPT-6.1-Sol', 'Gemini-3.8-Flash', 'GLM-5.3-flash', 'GLM-5.3'];
+var POE_ALLOWED_MODELS_ = ['Claude-Sonnet-5.5', 'GPT-6.1-Sol', 'Gemini-3.8-Flash', 'Gemini-4-Argon', 'GLM-5.3-flash', 'GLM-5.3'];
 // Ids and display names only. Prompts stay in POE_GENERATION_MODES on the client
 // and arrive as `instruction`. Keep ids and names in sync with that object.
 var POE_MODE_NAMES_ = {
@@ -661,14 +661,13 @@ function handleGenerate_(body) {
     return finalizeGeneratePayload_(result, backupName, requestId);
   } catch (err) {
     releaseIntervalSlot_(username);
-    var code = classifyFetchError_(err);
+    var fail = upstreamFailurePayload_(err);
     safeLog_(err);
     writeLog_({
       username: username,
       action: 'generateQuestions',
       success: false,
-      metadata: {
-        error: code,
+      metadata: mergeUpstreamFailureMeta_({
         model: model,
         provider: provider,
         modeId: modeId,
@@ -678,9 +677,9 @@ function handleGenerate_(body) {
         instructionProvidedChars: instructionMeta.providedChars,
         customInstruction: instructionMeta.custom,
         source: source
-      }
+      }, err)
     }, true);
-    return { ok: false, error: code };
+    return fail;
   }
 }
 
@@ -872,23 +871,22 @@ function handleContinueGeneration_(body) {
     return finalizeGeneratePayload_(result, backupName, requestId);
   } catch (err) {
     releaseIntervalSlot_(username);
-    var code = classifyFetchError_(err);
+    var fail = upstreamFailurePayload_(err);
     safeLog_(err);
     writeLog_({
       username: username,
       action: 'continueGeneration',
       success: false,
-      metadata: {
-        error: code,
+      metadata: mergeUpstreamFailureMeta_({
         model: model,
         provider: provider,
         modeId: modeId,
         durationMs: Date.now() - started,
         source: source,
         messageCount: packedMessages.messageCount
-      }
+      }, err)
     }, true);
-    return { ok: false, error: code };
+    return fail;
   }
 }
 
@@ -1260,15 +1258,19 @@ function handleGenerateAiExplanation_(body) {
     };
   } catch (err) {
     releaseIntervalSlot_(username);
-    var code = classifyFetchError_(err);
+    var fail = upstreamFailurePayload_(err);
     safeLog_(err);
     writeLog_({
       username: username,
       action: 'generateAiExplanation',
       success: false,
-      metadata: { error: code, questionId: questionId, model: model, detailLevel: detailLevel }
+      metadata: mergeUpstreamFailureMeta_({
+        questionId: questionId,
+        model: model,
+        detailLevel: detailLevel
+      }, err)
     }, true);
-    return { ok: false, error: code };
+    return fail;
   }
 }
 
@@ -4539,20 +4541,19 @@ function handleTest_(body) {
     return result;
   } catch (err) {
     releaseIntervalSlot_(username, 'test');
-    var code = classifyFetchError_(err);
+    var fail = upstreamFailurePayload_(err);
     safeLog_(err);
     writeLog_({
       username: username,
       action: 'testModel',
       success: false,
-      metadata: {
-        error: code,
+      metadata: mergeUpstreamFailureMeta_({
         model: model,
         provider: provider,
         durationMs: Date.now() - started
-      }
+      }, err)
     }, true);
-    return { ok: false, error: code };
+    return fail;
   }
 }
 
@@ -4645,21 +4646,20 @@ function handleReviewStemPatterns_(body) {
     return result;
   } catch (err) {
     releaseIntervalSlot_(username, 'review');
-    var code = classifyFetchError_(err);
+    var fail = upstreamFailurePayload_(err);
     safeLog_(err);
     writeLog_({
       username: username,
       action: 'reviewStemPatterns',
       success: false,
-      metadata: {
-        error: code,
+      metadata: mergeUpstreamFailureMeta_({
         model: model,
         provider: provider,
         sentCount: packed.questions.length,
         durationMs: Date.now() - started
-      }
+      }, err)
     }, true);
-    return { ok: false, error: code };
+    return fail;
   }
 }
 
@@ -4837,6 +4837,25 @@ function requestCompletionMessages_(apiKey, model, messages, provider) {
   if (status < 200 || status >= 300) {
     var httpError = new Error('upstream_http_' + status);
     httpError.code = status === 408 || status === 504 ? 'upstream_timeout' : 'upstream_error';
+    httpError.httpStatus = status;
+    httpError.upstreamType = '';
+    httpError.upstreamMessage = '';
+    try {
+      var errBody = JSON.parse(raw);
+      var errObj = errBody && errBody.error;
+      if (errObj && typeof errObj === 'object') {
+        var typeStr = errObj.type != null ? String(errObj.type).trim() : '';
+        var codeStr = errObj.code != null ? String(errObj.code).trim() : '';
+        httpError.upstreamType = (typeStr || codeStr).slice(0, 80);
+        if (errObj.message != null) {
+          httpError.upstreamMessage = clip_(errObj.message, 200);
+        }
+      } else if (typeof errObj === 'string' && errObj) {
+        httpError.upstreamMessage = clip_(errObj, 200);
+      }
+    } catch (parseIgnore) {
+      // Non-JSON error body — keep httpStatus only.
+    }
     throw httpError;
   }
   var parsed;
@@ -5780,14 +5799,18 @@ function handleDescribeImage_(body) {
   } catch (err) {
     releaseIntervalSlot_(username);
     safeLog_(err);
-    var code = err && err.code ? err.code : 'upstream_error';
+    var fail = upstreamFailurePayload_(err);
     writeLog_({
       username: username,
       action: 'describeImage',
       success: false,
-      metadata: { error: code, model: model, provider: provider, detail: clip_(err && err.message, 120) }
+      metadata: mergeUpstreamFailureMeta_({
+        model: model,
+        provider: provider,
+        detail: clip_(err && err.message, 120)
+      }, err)
     }, true);
-    return { ok: false, error: code === 'upstream_timeout' ? 'upstream_timeout' : 'upstream_error' };
+    return fail;
   }
 }
 
@@ -8565,6 +8588,41 @@ function classifyFetchError_(err) {
   var msg = String(err && err.message || err || '').toLowerCase();
   if (msg.indexOf('timeout') !== -1 || msg.indexOf('timed out') !== -1) return 'upstream_timeout';
   return 'upstream_error';
+}
+
+// Build client-facing upstream failure fields from a thrown UrlFetch error.
+// Keeps error as a stable code; passes Poe/OpenRouter HTTP status and error.type through.
+function upstreamFailurePayload_(err) {
+  var code = classifyFetchError_(err);
+  var httpStatus = null;
+  if (err && err.httpStatus != null && isFinite(Number(err.httpStatus))) {
+    httpStatus = Math.round(Number(err.httpStatus));
+  }
+  var upstreamType = '';
+  if (err && err.upstreamType != null) {
+    upstreamType = String(err.upstreamType).trim().slice(0, 80);
+  }
+  var upstreamDetail = '';
+  if (err && err.upstreamMessage != null) {
+    upstreamDetail = clip_(err.upstreamMessage, 200);
+  }
+  return {
+    ok: false,
+    error: code,
+    httpStatus: httpStatus,
+    upstreamType: upstreamType,
+    upstreamDetail: upstreamDetail
+  };
+}
+
+function mergeUpstreamFailureMeta_(meta, err) {
+  var payload = upstreamFailurePayload_(err);
+  var out = meta || {};
+  out.error = payload.error;
+  if (payload.httpStatus != null) out.httpStatus = payload.httpStatus;
+  if (payload.upstreamType) out.upstreamType = payload.upstreamType;
+  if (payload.upstreamDetail) out.upstreamDetail = payload.upstreamDetail;
+  return out;
 }
 
 function safeLog_(err) {
