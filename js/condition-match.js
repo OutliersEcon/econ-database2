@@ -30,7 +30,7 @@
         { id: 'paper', label: '卷別', kind: 'scalar', prop: 'paper', autocomplete: true },
         { id: 'section', label: 'Section', kind: 'scalar', prop: 'section', autocomplete: true },
         { id: 'publisher', label: '出版商', kind: 'scalar', prop: 'publisher', autocomplete: true },
-        { id: 'partPerformance', label: '分題表現', kind: 'partPerformance', autocomplete: true },
+        { id: 'partPerformance', label: '考生表現', kind: 'partPerformance', autocomplete: true },
         { id: 'partMarks', label: '分題分數', kind: 'partMarks', autocomplete: false },
         { id: 'feature', label: '特徵', kind: 'feature', autocomplete: true },
         { id: 'adminBlank', label: '空白／缺漏', kind: 'adminBlank', autocomplete: true, adminOnly: true }
@@ -93,6 +93,7 @@
         partPerformance: 'partPerformance',
         partperformance: 'partPerformance',
         '分題表現': 'partPerformance',
+        '考生表現': 'partPerformance',
         partMarks: 'partMarks',
         partmarks: 'partMarks',
         '分題分數': 'partMarks'

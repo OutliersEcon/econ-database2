@@ -37,7 +37,7 @@
 
     var ADMIN_BLANK_FEATURES = (typeof ADMIN_BLANK_FEATURE_ITEMS !== 'undefined' && Array.isArray(ADMIN_BLANK_FEATURE_ITEMS))
         ? ADMIN_BLANK_FEATURE_ITEMS.slice()
-        : ['尚未輸入分題', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖', '課程分類空白', '章節空白'];
+        : ['尚未輸入分題', '未輸入考生表現', '題目空白', '答案空白', '評卷報告空白', '缺內嵌圖', '缺原題圖片', '缺答案原圖', '課程分類空白', '章節空白'];
 
     function isBlankText(value) {
         if (value === null || value === undefined) return true;
@@ -617,6 +617,20 @@
         return !questionHasOriginalAnswer(question);
     }
 
+    // 未輸入考生表現: no usable performance on the question.
+    // MC → not applicable (same spirit as 尚未輸入分題 → none for MC).
+    // No parts → missing at question level.
+    // When parts exist → missing if any part lacks performance.
+    function isCandidatePerformanceBlank(question) {
+        var qtype = String(question && question.questionType != null ? question.questionType : '').trim();
+        if (qtype === 'MC') return false;
+        var parts = normalizeQuestionParts(question && question.questionParts);
+        if (parts.length === 0) return true;
+        return parts.some(function (part) {
+            return !part.performance || !String(part.performance).trim();
+        });
+    }
+
     // Shared 特徵 matcher for 題目 filters, 統計, and ConditionMatch.
     // Lives here (before condition-match.js) so advanced filter / data-checks
     // do not need a duplicate fallback body.
@@ -633,6 +647,7 @@
         if (value === '有分題') return questionHasParts(q);
         if (value === '沒有分題') return questionPartsConfirmedNone(q);
         if (value === '尚未輸入分題') return questionPartsPending(q);
+        if (value === '未輸入考生表現') return isCandidatePerformanceBlank(q);
         if (value === '題目空白') return isQuestionTextBlank(q);
         if (value === '答案空白') return isAnswerBlank(q);
         if (value === '評卷報告空白') return isMarkersReportBlank(q);
@@ -681,6 +696,7 @@
     global.isQuestionTextBlank = isQuestionTextBlank;
     global.isAnswerBlank = isAnswerBlank;
     global.isMarkersReportBlank = isMarkersReportBlank;
+    global.isCandidatePerformanceBlank = isCandidatePerformanceBlank;
     global.isAdminBlankFeature = isAdminBlankFeature;
     global.effectiveFeatureItems = effectiveFeatureItems;
     global.effectiveAdminBlankItems = effectiveAdminBlankItems;

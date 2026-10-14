@@ -5,7 +5,7 @@
 
 // Printed when the page loads. Bump this on every change so a reader can
 // tell whether the open tab is current. Do not keep a changelog here.
-const APP_VERSION = '2026.10.14.26';
+const APP_VERSION = '2026.10.14.27';
 console.log('Question bank version:', APP_VERSION);
 
 // Integer stamped on shared bank JSON as schemaVersion. Also an app-capability
@@ -99,6 +99,7 @@ const FEATURE_ITEMS = [
 // Not merged into 特徵.
 const ADMIN_BLANK_FEATURE_ITEMS = [
     '尚未輸入分題',
+    '未輸入考生表現',
     '題目空白',
     '答案空白',
     '評卷報告空白',
@@ -109,7 +110,7 @@ const ADMIN_BLANK_FEATURE_ITEMS = [
     '章節空白'
 ];
 
-// Per-part performance labels (exact values stored on questionParts[].performance).
+// 考生表現 labels (exact values stored on questionParts[].performance; UI label 考生表現).
 const PART_PERFORMANCE_ITEMS = [
     '優異',
     '優良',

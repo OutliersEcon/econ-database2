@@ -111,7 +111,7 @@ function renderFormTemplate() {
             <details class="form-fieldset" open>
                 <summary class="form-fieldset-summary">分題</summary>
                 <div class="form-group" style="grid-column: 1 / -1;">
-                    <label>分題分數／表現</label>
+                    <label>分題分數／考生表現</label>
                     <p style="margin:0 0 8px;color:var(--text-light);font-size:12px;line-height:1.45;">
                         用於 SQ/LQ 分題。請先選擇狀態：<strong>尚未輸入</strong>（未確認）、<strong>沒有分題</strong>（確認無分題）、或<strong>有分題</strong>（填寫各分）。有分題時每一分都必須有分數，且合計須等於上方「分數」總分。
                     </p>

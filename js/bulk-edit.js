@@ -63,7 +63,7 @@
         },
         {
             id: 'questionParts',
-            label: '分題（標籤,分數,表現 | …）',
+            label: '分題（標籤,分數,考生表現 | …）',
             kind: 'parts',
             prop: 'questionParts',
             defaultOn: true,
