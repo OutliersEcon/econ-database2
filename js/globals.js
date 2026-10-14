@@ -30,3 +30,11 @@ var filterLogic = {
 var paginationState = {
     questions: { page: 1, itemsPerPage: 20 }
 };
+
+// Bank load lifecycle for 題目 list (idle|loading|ok|empty|error).
+// Keeps load failure distinct from a filtered / empty bank.
+var questionsLoadState = {
+    status: 'idle',
+    message: ''
+};
+

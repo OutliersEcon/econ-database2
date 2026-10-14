@@ -44,27 +44,36 @@ function renderTabContentsTemplate() {
         <!-- Active filter badges -->
         <div class="active-filters-panel" id="active-filters-display"></div>
 
-        <!-- Sort controls -->
-        <div class="sort-controls-wrapper">
-            <button type="button" class="btn btn-outline-primary" id="copy-filtered-btn" onclick="copyFilteredQuestions()">📋 複製篩選題目</button>
-            <button type="button" class="btn btn-outline-primary" id="poe-generate-btn" hidden aria-label="AI出題">AI出題</button>
-            <button type="button" class="btn btn-outline-primary" id="stem-pattern-review-btn" hidden aria-label="題幹模式檢視">題幹模式檢視</button>
-            <span class="sort-label">排序方式：</span>
-            <select id="sort-order" onchange="onSortOrderChange()">
-                <option value="default">預設 (年份新→舊，題號小→大)</option>
-                <option value="year-desc">年份 (新→舊)</option>
-                <option value="year-asc">年份 (舊→新)</option>
-                <option value="question-asc">題號 (小→大)</option>
-                <option value="question-desc">題號 (大→小)</option>
-                <option value="marks-asc">分數 (低→高)</option>
-                <option value="marks-desc">分數 (高→低)</option>
-                <option value="percentage-asc">答對率 (低→高)</option>
-                <option value="percentage-desc">答對率 (高→低)</option>
-            </select>
-            <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer;">
-                <input type="checkbox" id="show-tags-toggle" checked onchange="toggleTags(this)"> 顯示詳細標籤
-            </label>
-            <span class="total-count" id="question-count">總題目數: 0</span>
+        <!-- Split 操作列: 結果工具 vs 顯示偏好 -->
+        <div class="questions-toolbar" aria-label="題目操作列">
+            <div class="toolbar-group toolbar-group-results" aria-labelledby="toolbar-results-label">
+                <span id="toolbar-results-label" class="toolbar-group-label">結果工具</span>
+                <div class="toolbar-group-controls">
+                    <button type="button" class="btn btn-outline-primary" id="copy-filtered-btn" onclick="copyFilteredQuestions()">📋 複製篩選題目</button>
+                    <button type="button" class="btn btn-outline-primary" id="poe-generate-btn" hidden aria-label="AI出題">AI出題</button>
+                    <button type="button" class="btn btn-outline-primary" id="stem-pattern-review-btn" hidden aria-label="題幹模式檢視">題幹模式檢視</button>
+                </div>
+            </div>
+            <div class="toolbar-group toolbar-group-display sort-controls-wrapper" aria-labelledby="toolbar-display-label">
+                <span id="toolbar-display-label" class="toolbar-group-label">顯示偏好</span>
+                <div class="toolbar-group-controls">
+                    <span class="sort-label">排序方式：</span>
+                    <select id="sort-order" onchange="onSortOrderChange()" aria-label="排序方式">
+                        <option value="default">預設 (年份新→舊，題號小→大)</option>
+                        <option value="year-desc">年份 (新→舊)</option>
+                        <option value="year-asc">年份 (舊→新)</option>
+                        <option value="question-asc">題號 (小→大)</option>
+                        <option value="question-desc">題號 (大→小)</option>
+                        <option value="marks-asc">分數 (低→高)</option>
+                        <option value="marks-desc">分數 (高→低)</option>
+                        <option value="percentage-asc">答對率 (低→高)</option>
+                        <option value="percentage-desc">答對率 (高→低)</option>
+                    </select>
+                    <label class="show-tags-label" style="display: inline-flex; align-items: center; gap: 6px; font-size: 14px; cursor: pointer;">
+                        <input type="checkbox" id="show-tags-toggle" checked onchange="toggleTags(this)"> 顯示詳細標籤
+                    </label>
+                </div>
+            </div>
         </div>
 
         <!-- Action bar (admin-only actions) -->
@@ -88,6 +97,12 @@ function renderTabContentsTemplate() {
         </div>
 
         ${renderFormTemplate()}
+
+        <!-- List title + count (moved out of crowded toolbar) -->
+        <div class="question-list-heading">
+            <h2 class="question-list-title">題目列表</h2>
+            <span class="total-count" id="question-count">總題目數: 0</span>
+        </div>
 
         <!-- Top pagination -->
         <div class="pagination-container">

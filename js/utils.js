@@ -242,11 +242,12 @@ function toggleFiltersPanel() {
                         wrapper.style.maxHeight === '';
 
     if (isCollapsed) {
-        // 展開
+        // 展開基本篩選
         wrapper.style.maxHeight = '2000px'; // 確保大於內容高度
         wrapper.style.opacity = '1';
         wrapper.style.marginTop = '15px';
         btn.innerHTML = '🔽 隱藏篩選條件';
+        btn.setAttribute('aria-expanded', 'true');
 
         clearTimeout(wrapper._overflowTimer);
         wrapper._overflowTimer = setTimeout(() => {
@@ -260,6 +261,7 @@ function toggleFiltersPanel() {
         wrapper.style.opacity = '0';
         wrapper.style.marginTop = '0';
         btn.innerHTML = '▶️ 顯示篩選條件';
+        btn.setAttribute('aria-expanded', 'false');
     }
 }
 

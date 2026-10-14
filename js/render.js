@@ -82,6 +82,37 @@ function safeHttpUrl(url) {
 }
 
 async function renderQuestions() {
+    const gridEarly = document.getElementById('question-grid');
+    const loadStateEarly = window.questionsLoadState || { status: 'idle', message: '' };
+    if (gridEarly && (loadStateEarly.status === 'loading' || loadStateEarly.status === 'error' || loadStateEarly.status === 'empty')) {
+        const countEarly = document.getElementById('question-count');
+        if (countEarly) countEarly.textContent = '總題目數: 0';
+        if (typeof updatePaginationInfo === 'function') {
+            try { updatePaginationInfo(1, 0, (window.paginationState && paginationState.questions && paginationState.questions.itemsPerPage) || 20); } catch (e) {}
+        }
+        if (loadStateEarly.status === 'loading') {
+            gridEarly.innerHTML = '<div class="list-state list-state-loading" role="status"><p>正在載入題目…</p></div>';
+            return;
+        }
+        if (loadStateEarly.status === 'error') {
+            const reason = escapeHTML(loadStateEarly.message || '題庫載入失敗');
+            gridEarly.innerHTML = '<div class="list-state list-state-error" role="alert">'
+                + '<p class="list-state-title">無法載入題目</p>'
+                + '<p class="list-state-reason">原因：' + reason + '</p>'
+                + '<p class="list-state-hint">這不是空的題庫。請檢查網絡或稍後再試。</p>'
+                + '<button type="button" class="btn btn-primary" onclick="retryQuestionsLoad()">重新載入</button>'
+                + '</div>';
+            return;
+        }
+        const reasonEmpty = escapeHTML(loadStateEarly.message || '題庫沒有有效題目資料');
+        gridEarly.innerHTML = '<div class="list-state list-state-empty-bank" role="status">'
+            + '<p class="list-state-title">題庫目前沒有題目</p>'
+            + '<p class="list-state-reason">' + reasonEmpty + '</p>'
+            + '<button type="button" class="btn btn-primary" onclick="retryQuestionsLoad()">重新載入</button>'
+            + '</div>';
+        return;
+    }
+
     const filters = {
         search: document.getElementById('search').value,
         searchScope: window.searchScope || 'all',
@@ -92,6 +123,17 @@ async function renderQuestions() {
         idSetFilter: window.idSetFilter,
         advancedFilter: window.advancedFilter
     };
+
+    if (!window.storage || typeof storage.getQuestions !== 'function') {
+        if (gridEarly) {
+            gridEarly.innerHTML = '<div class="list-state list-state-error" role="alert">'
+                + '<p class="list-state-title">無法載入題目</p>'
+                + '<p class="list-state-reason">原因：資料庫尚未就緒</p>'
+                + '<button type="button" class="btn btn-primary" onclick="retryQuestionsLoad()">重新載入</button>'
+                + '</div>';
+        }
+        return;
+    }
 
     let questions = await storage.getQuestions(filters);
 
@@ -131,12 +173,23 @@ async function renderQuestions() {
         }).join('');
     };
 
-    document.getElementById('question-count').textContent = `總題目數: ${questions.length}`;
+    const countEl = document.getElementById('question-count');
+    if (countEl) countEl.textContent = `總題目數: ${questions.length}`;
 
     const grid = document.getElementById('question-grid');
+    if (!grid) return;
 
     if (questions.length === 0) {
-        grid.innerHTML = '<p style="text-align: center; padding: 40px; color: #7f8c8d;">未找到題目</p>';
+        const searchVal = (document.getElementById('search') && document.getElementById('search').value) || '';
+        const filteredHint = searchVal.trim()
+            || (window.advancedFilter && window.advancedFilter.active)
+            || (window.idSetFilter && window.idSetFilter.active)
+            ? '目前篩選條件下沒有符合的題目。可調整快速搜尋、基本篩選或進階篩選後再試。'
+            : '未找到題目。若剛載入完成，可嘗試重置篩選條件。';
+        grid.innerHTML = '<div class="list-state list-state-filtered-empty" role="status">'
+            + '<p class="list-state-title">未找到題目</p>'
+            + '<p class="list-state-hint">' + escapeHTML(filteredHint) + '</p>'
+            + '</div>';
         return;
     }
 

@@ -12,6 +12,65 @@ function logout() {
     }
 }
 
+// Show header chrome that only makes sense after a successful login.
+function setAuthenticatedChromeVisible(visible) {
+    document.querySelectorAll('[data-auth-required]').forEach(function (el) {
+        el.hidden = !visible;
+    });
+}
+
+function setQuestionsLoadState(status, message) {
+    window.questionsLoadState = {
+        status: status || 'idle',
+        message: message ? String(message) : ''
+    };
+}
+
+function safeLoadErrorMessage(error, fallback) {
+    const detail = error && error.message ? String(error.message) : '';
+    if (detail && detail.length <= 80 && detail.indexOf('token') === -1 && detail.indexOf('github.com') === -1) {
+        return detail;
+    }
+    return fallback || '題庫載入失敗';
+}
+
+// Re-run bank JSON sync after a load failure (Retry on the 題目 list).
+async function retryQuestionsLoad() {
+    if (!window.questionJsonSource) {
+        setQuestionsLoadState('error', 'JSON 資料來源未設定，請檢查 config.js');
+        if (typeof renderQuestions === 'function') await renderQuestions();
+        return;
+    }
+    setQuestionsLoadState('loading', '正在重新載入題目…');
+    updateStorageStatus('loading', '⏳ 載入資料中...');
+    if (typeof renderQuestions === 'function') await renderQuestions();
+    try {
+        const result = await window.questionJsonSource.syncOnLoad();
+        if (result && result.success) {
+            setQuestionsLoadState('ok', '');
+            updateStorageStatus('connected', '✓ 資料載入完成');
+            if (typeof populateSearchScope === 'function') populateSearchScope();
+            if (typeof refreshViews === 'function') {
+                await refreshViews();
+            } else if (typeof renderQuestions === 'function') {
+                await renderQuestions();
+            }
+            return;
+        }
+        setQuestionsLoadState('empty', '題庫沒有有效題目資料');
+        updateStorageStatus('disconnected', '✗ 題庫沒有有效題目');
+        if (typeof renderQuestions === 'function') await renderQuestions();
+    } catch (error) {
+        const safe = safeLoadErrorMessage(error, 'JSON 載入失敗');
+        setQuestionsLoadState('error', safe);
+        updateStorageStatus('disconnected', '✗ ' + safe);
+        if (typeof renderQuestions === 'function') await renderQuestions();
+    }
+}
+
+window.retryQuestionsLoad = retryQuestionsLoad;
+window.setAuthenticatedChromeVisible = setAuthenticatedChromeVisible;
+
 // Initialize application
 async function init() {
     console.log('🚀 初始化應用程式...');
@@ -31,6 +90,7 @@ async function init() {
     }
     
     console.log('✅ 使用者已驗證:', window.authManager.displayName);
+    setAuthenticatedChromeVisible(true);
 
     if (typeof refreshAccessRights === 'function') {
         await refreshAccessRights();
@@ -49,6 +109,7 @@ async function init() {
     updateUserDisplay();
     
     // Show loading state
+    setQuestionsLoadState('loading', '正在載入題目…');
     showLoadingState(true);
     
     // Initialize storage
@@ -59,32 +120,43 @@ async function init() {
         console.log('✅ IndexedDB 已初始化');
     } catch (error) {
         console.error('Failed to initialize storage:', error);
-        updateStorageStatus('disconnected', '✗ 資料庫初始化失敗');
+        const safe = safeLoadErrorMessage(error, '資料庫初始化失敗');
+        setQuestionsLoadState('error', safe);
+        updateStorageStatus('disconnected', '✗ ' + safe);
         showLoadingState(false);
-        return; // Stop if storage fails
+        if (typeof renderQuestions === 'function') {
+            try { await renderQuestions(); } catch (ignore) {}
+        }
+        return;
     }
     
-    // Load the question bank from the private repository. A proxy failure leaves the list empty.
+    // Load the question bank from the private repository.
+    // Failures must surface as an error state (with Retry), not an empty bank.
     if (window.questionJsonSource) {
         try {
             console.log('📥 開始從 JSON 載入資料...');
             updateStorageStatus('loading', '⏳ 載入資料中...');
             const result = await window.questionJsonSource.syncOnLoad();
             
-            if (result.success) {
+            if (result && result.success) {
                 console.log('✅ JSON 資料載入完成');
                 console.log(`📊 載入 ${result.count} 題`);
+                setQuestionsLoadState('ok', '');
                 updateStorageStatus('connected', `✓ 資料載入完成`);
+            } else {
+                setQuestionsLoadState('empty', '題庫沒有有效題目資料');
+                updateStorageStatus('disconnected', '✗ 題庫沒有有效題目');
             }
         } catch (error) {
             console.error('Failed to load JSON:', error);
-            const detail = error && error.message ? String(error.message) : '';
-            const safe = detail && detail.length <= 80 && detail.indexOf('token') === -1 && detail.indexOf('github.com') === -1
-                ? detail
-                : 'JSON 載入失敗';
+            const safe = safeLoadErrorMessage(error, 'JSON 載入失敗');
             console.warn('⚠️ JSON 載入失敗:', safe);
+            setQuestionsLoadState('error', safe);
             updateStorageStatus('disconnected', '✗ ' + safe);
         }
+    } else {
+        setQuestionsLoadState('error', 'JSON 資料來源未設定，請檢查 config.js');
+        updateStorageStatus('disconnected', '✗ 資料來源未設定');
     }
     
     // Initialize UI components
@@ -209,20 +281,29 @@ async function manualSync() {
     
     try {
         showLoading('正在從 JSON 載入資料...');
+        setQuestionsLoadState('loading', '正在載入題目…');
         const result = await window.questionJsonSource.syncOnLoad();
         hideLoading();
         
-        if (result.success) {
+        if (result && result.success) {
+            setQuestionsLoadState('ok', '');
             if (typeof populateSearchScope === 'function') {
                 populateSearchScope();
             }
             await refreshViews();
             alert(`✅ 載入成功！\n\n匯入 ${result.count} 題`);
             console.log('✅ JSON 資料載入完成');
+        } else {
+            setQuestionsLoadState('empty', '題庫沒有有效題目資料');
+            if (typeof renderQuestions === 'function') await renderQuestions();
+            alert('⚠️ 題庫沒有有效題目資料');
         }
     } catch (error) {
         hideLoading();
-        alert('❌ 載入失敗: ' + error.message);
+        const safe = safeLoadErrorMessage(error, '載入失敗');
+        setQuestionsLoadState('error', safe);
+        if (typeof renderQuestions === 'function') await renderQuestions();
+        alert('❌ 載入失敗: ' + safe);
     }
 }
 
