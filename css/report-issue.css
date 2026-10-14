@@ -407,3 +407,47 @@ body.report-issue-open {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
 }
+
+
+/* Header: pending staging flush chip (question-tab workflow without hub) */
+.staging-pending-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px 4px 10px;
+    border-radius: 999px;
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    color: #9a3412;
+    font-size: 0.85rem;
+    font-weight: 600;
+    max-width: min(92vw, 360px);
+}
+
+.staging-pending-chip[hidden] {
+    display: none !important;
+}
+
+.staging-pending-chip.is-flushing {
+    background: #eff6ff;
+    border-color: #93c5fd;
+    color: #1e40af;
+}
+
+.staging-pending-chip.is-error {
+    background: #fef2f2;
+    border-color: #fca5a5;
+    color: #991b1b;
+}
+
+.staging-pending-chip-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.staging-pending-chip .btn {
+    white-space: nowrap;
+    padding: 4px 10px;
+    font-size: 0.8rem;
+}

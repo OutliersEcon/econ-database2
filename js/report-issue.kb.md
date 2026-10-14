@@ -44,14 +44,23 @@ sequenceDiagram
 - **批量通過**（`bulkApprove*`）仍即時打雲端；若本機仍有 pending，會提示先關閉同步。
 - Soft refresh／關頁：pending 存 `EconFeedbackHubPending`（IndexedDB；失敗時 fallback `localStorage`）。
 
-### 題目 tab 卡上 ✓／✕（`.30`）
+### 兩套同步邏輯（hub vs 題目 tab）
 
-- Admin（`rights.admin`，同可開「審批與回報」）先 `ensureStagingCache` 拉 `listClassificationProposals`／`listQuestionPartsProposals`。
-- 有 pending 嘅題目卡喺 `回報問題` 按鈕列上方顯示「待審批分類」同／或「待審批分題」＋✓／✕；無 pending → 唔加 UI。
-- ✓／✕ = **整單通過／拒絕**（同 hub「通過全部欄位」／「全部保留原值」或分題 approve／reject）；重用 `approve*Proposal`／`reject*Proposal` → `enqueuePendingOp`；**唔**做 per-field。
-- 拒絕仍用 hub 既有 `confirm`；覆寫／清空確認一樣喺 enqueue 前。
-- Toast：`已加入本機佇列，關閉「審批與回報」或稍後會上傳`。Flush 時機不變（關 hub／下次關 hub 重試；`beforeunload` 警告）。
-- `ReportIssue.stagingActionsHtml`／`handleCardStagingAction`／`refreshQuestionCardStaging` 畀 `render.js`／`main.js` 用。
+| 場景 | 行為 |
+| --- | --- |
+| **Hub「審批與回報」內** | local-first（`.29`）：approve／reject → `pendingOps`；**唔**逐點上雲；**關閉 modal** 時串列 `flushPendingOps`；關窗失敗／仍有 pending → in-app confirm |
+| **題目 tab ✓／✕（hub 外）** | 同樣先 `enqueuePendingOp`（樂觀 UI）；之後跟 **`readAutoSync()`**（`econ_git_auto_sync`／header「自動同步」checkbox，同 `github-sync.js`） |
+| ↳ 自動同步 **開** | 即刻 `flushPendingOps({ reason: 'auto-sync' })`（經 `enqueueStagingWrite` 防 409）；**唔使開 hub** |
+| ↳ 自動同步 **關** | 留本機 queue；header chip「待上傳審批 N」＋「立即上傳」；或再開自動同步後下次外層操作／手動上傳 |
+| **兩者** | 有 unsynced pending → `beforeunload`；flush 失敗保留 pending＋TC 錯誤＋chip 可重試 |
+
+### 題目 tab 卡上 ✓／✕（`.30`／`.31`）
+
+- Admin（`rights.admin`）`ensureStagingCache` 拉 `listClassificationProposals`／`listQuestionPartsProposals`。
+- 有 pending → 卡上「待審批分類」／「待審批分題」＋✓／✕；無 pending → UI 不變。
+- ✓／✕ = one-shot 整單通過／拒絕（重用 hub `approve*Proposal`／`reject*Proposal`）；**唔**做 per-field。
+- 外層入口：`handleCardStagingAction`（讀 `isGitAutoSyncOn()` → `readAutoSync`）。
+- `ReportIssue.stagingActionsHtml`／`refreshQuestionCardStaging` 畀 `render.js`／`main.js`。
 
 ### Soft pause banner
 
@@ -63,8 +72,9 @@ sequenceDiagram
 
 | 選項 | 選擇 | 原因 |
 | --- | --- | --- |
-| 每點即時同步雲端 | **否**（改 local-first） | 點擊要即時；網路／GitHub 寫入慢 |
-| 何時 flush | **關閉 hub modal** | 一次 session 內多筆審批，關閉時串列寫入 |
+| Hub 內每點即時上雲 | **否**（local-first） | 點擊要即時；網路／GitHub 寫入慢 |
+| Hub 何時 flush | **關閉 hub modal** | session 多筆審批，關窗串列寫入 |
+| 題目 tab（hub 外）何時上雲 | **跟「自動同步」**（`readAutoSync`）；關則 queue＋「立即上傳」chip | 唔另造設定；唔強迫開 hub |
 | 持久化 pending | **IndexedDB `EconFeedbackHubPending`**（+ localStorage fallback） | soft refresh 唔好無聲丟工 |
 | 離開頁警告 | **`beforeunload` 僅在有 unsynced pending** | 瀏覽器多忽略自訂字串，仍要 wire；flush 失敗另用 in-app confirm |
 | 多 admin 一致性 | **接受 flush 前 staleness** | 他機會仍見未 flush 嘅 staging；文件化風險 |
@@ -84,6 +94,7 @@ sequenceDiagram
 | PR #78（`.28`） | **Approve unlock**：staging 成功即解鎖；IDB apply 背景化；寫入佇列＋per-proposal in-flight |
 | `.29` local-first | **Approve／reject 先入本機 queue**；關 hub 先 flush；IDB 持久化；`beforeunload`；多 admin staleness 接受 |
 | `.30` 題目卡 ✓／✕ | 題目 tab 卡對 pending 分類／分題 one-shot 入同一 pendingOps；無 pending 唔顯示 |
+| `.31` hub vs 外層同步 | Hub 維持關窗 flush；題目 tab 跟 `readAutoSync` 即時 flush 或留 queue＋chip |
 
 ## 待辦
 
@@ -104,3 +115,10 @@ sequenceDiagram
 8. pending ≥200 時應見暫停橫幅；另用 agent 再 submit 一題仍應成功（`paused:true`）。  
 9. 分題審批：本機已有分題 → 覆寫 confirm 後入 queue；拒絕只喺 flush 後刪 staging、不改 bank。  
 10. 有本機 pending 時按「通過全部」批量：應提示先關閉同步，唔直接批量。
+
+11. 題目 tab（admin）：有 pending 見「待審批…」✓／✕；非 admin／無 pending → 唔見。  
+12. **自動同步開**：卡上 ✓ → toast 上傳中 → 成功後 chip 清空；**唔使**開「審批與回報」。  
+13. **自動同步關**：卡上 ✓ → 入本機佇列、chip「待上傳審批」；按「立即上傳」或稍後再開自動同步；關頁有 beforeunload。  
+14. Hub 內通過多筆 → **唔**因自動同步而逐點上雲；只喺關 hub 時 flush。  
+15. 同一題分類＋分題：兩行各自 ✓／✕。  
+16. 斷網＋外層自動同步開：flush 失敗 → 錯誤 toast、pending／chip 保留；恢復後「立即上傳」成功。
