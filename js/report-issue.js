@@ -752,6 +752,53 @@
         }
     }
 
+    /** Compact proposed vs current for 分類 pending on question card. */
+    function stagingClassPreviewHtml(row) {
+        if (!row) return '';
+        var proposed = row.proposedValues || {};
+        var current = row.currentValues || {};
+        var fields = Array.isArray(row.fields) ? row.fields.slice() : [];
+        if (!fields.length) {
+            fields = Object.keys(proposed);
+        }
+        if (!fields.length) return '';
+        var lines = fields.map(function (field) {
+            var label = classFieldLabel(field);
+            var propStr = formatClassList(proposed[field]);
+            var curStr = formatClassList(current[field]);
+            var html = '<div class="question-staging-preview-line">'
+                + '<span class="question-staging-field">' + esc(label) + '</span>'
+                + '<code class="question-staging-proposed">' + esc(propStr) + '</code>';
+            if (curStr !== propStr) {
+                html += '<span class="question-staging-current">現有：' + esc(curStr) + '</span>';
+            }
+            html += '</div>';
+            return html;
+        });
+        return '<div class="question-staging-preview">' + lines.join('') + '</div>';
+    }
+
+    /** Compact proposed questionParts for 分題 pending on question card. */
+    function stagingPartsPreviewHtml(row) {
+        if (!row) return '';
+        var parts = Array.isArray(row.questionParts) ? row.questionParts : [];
+        if (!parts.length) {
+            return '<div class="question-staging-preview">'
+                + '<code class="question-staging-proposed">' + esc(formatPartsPreview(parts)) + '</code>'
+                + '</div>';
+        }
+        var lines = parts.map(function (part) {
+            var label = String(part && part.label != null ? part.label : '').trim() || '?';
+            var marks = part && part.marks != null && part.marks !== '' ? String(part.marks) : '—';
+            var perf = String(part && part.performance || '').trim();
+            var bits = '<span class="question-staging-field">分題 ' + esc(label) + '</span>'
+                + '<code class="question-staging-proposed">' + esc(marks) + ' 分'
+                + (perf ? ' ｜ ' + esc(perf) : '') + '</code>';
+            return '<div class="question-staging-preview-line">' + bits + '</div>';
+        });
+        return '<div class="question-staging-preview">' + lines.join('') + '</div>';
+    }
+
     function stagingActionsHtml(questionId) {
         if (!hasAdminAccess()) return '';
         if (!hubState.stagingCacheReady && !hubState.partsRows.length && !hubState.classRows.length) {
@@ -762,6 +809,7 @@
         if (pending.classRow && pending.classRow.id) {
             bits.push(
                 '<div class="question-staging-row" data-staging-kind="class">'
+                + '<div class="question-staging-row-head">'
                 + '<span class="question-staging-label">待審批分類</span>'
                 + '<button type="button" class="question-staging-btn is-approve" data-action="staging-approve"'
                 + ' data-kind="class" data-proposal-id="' + esc(pending.classRow.id) + '"'
@@ -770,11 +818,14 @@
                 + ' data-kind="class" data-proposal-id="' + esc(pending.classRow.id) + '"'
                 + ' data-id="' + esc(questionId) + '" title="全部保留原值（本機佇列）">✕</button>'
                 + '</div>'
+                + stagingClassPreviewHtml(pending.classRow)
+                + '</div>'
             );
         }
         if (pending.partsRow && pending.partsRow.id) {
             bits.push(
                 '<div class="question-staging-row" data-staging-kind="parts">'
+                + '<div class="question-staging-row-head">'
                 + '<span class="question-staging-label">待審批分題</span>'
                 + '<button type="button" class="question-staging-btn is-approve" data-action="staging-approve"'
                 + ' data-kind="parts" data-proposal-id="' + esc(pending.partsRow.id) + '"'
@@ -782,6 +833,8 @@
                 + '<button type="button" class="question-staging-btn is-reject" data-action="staging-reject"'
                 + ' data-kind="parts" data-proposal-id="' + esc(pending.partsRow.id) + '"'
                 + ' data-id="' + esc(questionId) + '" title="拒絕分題提案（本機佇列）">✕</button>'
+                + '</div>'
+                + stagingPartsPreviewHtml(pending.partsRow)
                 + '</div>'
             );
         }
