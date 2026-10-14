@@ -54,11 +54,15 @@ sequenceDiagram
 | ↳ 自動同步 **關** | 留本機 queue；header chip「待上傳審批 N」＋「立即上傳」；或再開自動同步後下次外層操作／手動上傳 |
 | **兩者** | 有 unsynced pending → `beforeunload`；flush 失敗保留 pending＋TC 錯誤＋chip 可重試 |
 
-### 題目 tab 卡上 ✓／✕（`.30`／`.31`）
+### 題目 tab 卡上 ✓／✕（`.30`／`.31`／`.33` preview）
 
 - Admin（`rights.admin`）`ensureStagingCache` 拉 `listClassificationProposals`／`listQuestionPartsProposals`。
 - 有 pending → 卡上「待審批分類」／「待審批分題」＋✓／✕；無 pending → UI 不變。
-- ✓／✕ = one-shot 整單通過／拒絕（重用 hub `approve*Proposal`／`reject*Proposal`）；**唔**做 per-field。
+- **`.33` 提案預覽**：黃色 bar 內顯示 proposed 內容（唔使開 hub）  
+  - 分類：`stagingClassPreviewHtml` — 每欄 `classFieldLabel` + `formatClassList(proposed)`；若與 `currentValues` 不同則附「現有：…」  
+  - 分題：`stagingPartsPreviewHtml` — 每行「分題 {label}｜{marks} 分｜{performance}」（空時回落 `formatPartsPreview`）  
+  - CSS：`.question-staging-preview`／`-field`／`-proposed`／`-current`（`report-issue.css`）
+- ✓／✕ = one-shot 整單通過／拒絕（重用 hub `approve*Proposal`／`reject*Proposal`）；**唔**做 per-field（卡上仍整單）。
 - 外層入口：`handleCardStagingAction`（讀 `isGitAutoSyncOn()` → `readAutoSync`）。
 - `ReportIssue.stagingActionsHtml`／`refreshQuestionCardStaging` 畀 `render.js`／`main.js`。
 - Admin「空白／缺漏」**有未審批事項**（.32）：`questionFeatureOn` → `pendingForQuestion`；`filterQuestions` 會 `await ensureStagingCache`；本機 approve 後列／chip 一齊消失。
@@ -97,9 +101,11 @@ sequenceDiagram
 | `.30` 題目卡 ✓／✕ | 題目 tab 卡對 pending 分類／分題 one-shot 入同一 pendingOps；無 pending 唔顯示 |
 | `.31` hub vs 外層同步 | Hub 維持關窗 flush；題目 tab 跟 `readAutoSync` 即時 flush 或留 queue＋chip |
 | `.32` 有未審批事項 filter | admin blank 重用 staging cache／`pendingForQuestion`；唔另造 pending 源 |
+| `.33` 卡上提案預覽 | 黃色 bar 顯示 proposedValues／questionParts（`formatClassList`／`formatPartsPreview`）；✓／✕ 不變 |
 
 ## 待辦
 
+- [x] 題目卡 pending 顯示提案內容（.33；分類欄位 diff + 分題 parts preview）
 - [ ] 大批量分類通過時的進度／取消 UX（待核實需求）
 - [ ] issues／AI tab 是否也需要 per-item in-flight／local queue（目前多用 `hubState.busy` 即時雲端）
 - [ ] flush 中「取消其餘」按鈕（而家只暫停喺失敗／取消覆寫）
@@ -118,7 +124,7 @@ sequenceDiagram
 9. 分題審批：本機已有分題 → 覆寫 confirm 後入 queue；拒絕只喺 flush 後刪 staging、不改 bank。  
 10. 有本機 pending 時按「通過全部」批量：應提示先關閉同步，唔直接批量。
 
-11. 題目 tab（admin）：有 pending 見「待審批…」✓／✕；非 admin／無 pending → 唔見。  
+11. 題目 tab（admin）：有 pending 見「待審批…」＋提案內容預覽＋✓／✕；分類見欄位／提案（現有若不同）；分題見 `formatPartsPreview`；非 admin／無 pending → 唔見。  
 12. **自動同步開**：卡上 ✓ → toast 上傳中 → 成功後 chip 清空；**唔使**開「審批與回報」。  
 13. **自動同步關**：卡上 ✓ → 入本機佇列、chip「待上傳審批」；按「立即上傳」或稍後再開自動同步；關頁有 beforeunload。  
 14. Hub 內通過多筆 → **唔**因自動同步而逐點上雲；只喺關 hub 時 flush。  

@@ -36,7 +36,7 @@
 
 | 路徑 | 範圍 |
 | --- | --- |
-| [`js/report-issue.kb.md`](js/report-issue.kb.md) | 回饋／回報 hub：local-first 關窗 flush（.29）；題目卡 ✓／✕（.30）；外層跟「自動同步」`readAutoSync`／chip（.31） |
+| [`js/report-issue.kb.md`](js/report-issue.kb.md) | 回饋／回報 hub：local-first 關窗 flush（.29）；題目卡 ✓／✕（.30）+ 提案預覽（.33）；外層跟「自動同步」`readAutoSync`／chip（.31） |
 | [`js/filters.kb.md`](js/filters.kb.md) | 題目篩選；特徵 vs admin「空白／缺漏」（含有未審批事項）；考生表現 |
 | [`js/github-sync.kb.md`](js/github-sync.kb.md) | 題庫 load／save、shards、dirty upload、schemaVersion |
 | [`js/ai-explanation.kb.md`](js/ai-explanation.kb.md) | AI解釋 side-file；`accessRights.ai`；Poe proxy |
